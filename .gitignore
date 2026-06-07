@@ -3,5 +3,6 @@
 
 # Python
 .venv/
+__pycache__/
 
 sample_study_*

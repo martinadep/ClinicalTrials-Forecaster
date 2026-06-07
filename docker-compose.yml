@@ -72,6 +72,14 @@ services:
       echo 'Topics created. Current list:'
       kafka-topics --bootstrap-server kafka:29092 --list
       "
+  kafdrop:
+    image: obsidiandynamics/kafdrop
+    ports:
+      - "9000:9000"
+    environment:
+      KAFKA_BROKERCONNECT: "kafka:29092" 
+    depends_on:
+      - kafka
 
 volumes:
   postgres_data:

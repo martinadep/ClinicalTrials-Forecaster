@@ -54,6 +54,7 @@ The services will be available at:
 * PostgreSQL: `localhost:5432`
 * Adminer: `http://localhost:8080`
 * Kafka: `localhost:9092` (from host machine) / `kafka:29092` (from inside Docker network)
+* Kafdrop (Kafka UI): `http://localhost:9000`
 
 ### Accessing the database
 
@@ -110,6 +111,14 @@ Read messages from a topic (Ctrl+C to exit):
 docker exec clinical_trial_kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic trials.bronze --from-beginning --max-messages 10
 ```
 
+Kafdrop provides a web UI to browse topics, partitions and messages. Open:
+
+```text
+http://localhost:9000
+```
+
+Use the Kafdrop UI to inspect `trials.bronze`, `trials.silver`, `trials.gold`, and `trials.forecasts`.
+
 ### Resetting the system
 
 To completely recreate the database and Kafka state:
@@ -124,7 +133,7 @@ This removes the existing Docker volumes and reruns initialization. **Warning:**
 ### Running testing fetcher
 
 ```bash
-python ./ingestion/fetcher.py
+python -m ingestion.fetcher
 ```
 
 This will:
