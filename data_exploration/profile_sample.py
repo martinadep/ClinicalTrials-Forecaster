@@ -20,18 +20,6 @@ COSA FA QUESTO SCRIPT
      - sample_profile_report.txt   (report leggibile da incollare nel Word)
      - sample_profile_data.csv     (dati grezzi per analisi successive)
 
-COME ESEGUIRLO
---------------
-1. Apri questo file in Visual Studio Code.
-2. Premi F5 (oppure clicca sulla freccia "Play" in alto a destra).
-3. Aspetta circa 15-30 minuti (scarica i dati dall'API).
-4. Apri il file sample_profile_report.txt per vedere i risultati.
-
-REQUISITI
----------
-- Python 3.9 o superiore
-- Pacchetto 'requests' (lo script ti dice come installarlo se manca)
-"""
 
 # =====================================================================
 # IMPORT - Librerie standard, nessuna installazione speciale serve
