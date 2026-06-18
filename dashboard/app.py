@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import random
 
-st.title("Clinical Trial Site Recommender")
-st.write("Enter your trial details and find out where to recruit participants faster.")
+st.title("🏥 Clinical Trial Site Recommender")
+st.write("Enter your trial details in the sidebar to find out where to recruit participants faster.")
 
 # Provisional list of conditions (placeholder).
 # Will later be replaced by the real MeSH terms extracted from the dataset.
@@ -53,33 +53,35 @@ def predict_sites(condition, study_type, phase, enrollment, regions):
     return results
 
 
-st.header("Trial details")
+# ---------- SIDEBAR: user inputs ----------
+st.sidebar.header("Trial details")
 
-condition = st.selectbox(
+condition = st.sidebar.selectbox(
     "Medical condition", options=CONDITIONS,
     index=None, placeholder="Type to search a condition...",
 )
 
-study_type = st.selectbox("Study type", ["Interventional", "Observational"])
+study_type = st.sidebar.selectbox("Study type", ["Interventional", "Observational"])
 
-phase = st.selectbox(
+phase = st.sidebar.selectbox(
     "Phase", ["Phase 1", "Phase 2", "Phase 3", "Phase 4", "Not applicable"],
 )
 
-enrollment = st.number_input(
+enrollment = st.sidebar.number_input(
     "Target enrollment (number of patients)", min_value=1, value=100,
 )
 
-regions = st.multiselect(
+regions = st.sidebar.multiselect(
     "Candidate regions / countries",
     list(FAKE_SITES.keys()),
 )
 
-st.divider()
+run = st.sidebar.button("Recommend sites")
 
-if st.button("Recommend sites"):
+# ---------- MAIN AREA: results ----------
+if run:
     if condition is None or len(regions) == 0:
-        st.warning("Please select a condition and at least one region.")
+        st.warning("Please select a condition and at least one region in the sidebar.")
     else:
         predictions = predict_sites(condition, study_type, phase, enrollment, regions)
         ranking = pd.DataFrame(predictions)
@@ -96,3 +98,5 @@ if st.button("Recommend sites"):
 
         st.subheader("Site locations")
         st.map(ranking[["lat", "lon"]])
+else:
+    st.info("👈 Fill in the trial details in the sidebar and click **Recommend sites**.")
