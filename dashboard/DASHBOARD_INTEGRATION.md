@@ -124,3 +124,9 @@ model code.
 2. Who exports the real conditions list (Point A), and in what format?
 3. Do the model's output field names match section 3 exactly? If not, we align
    the names **before** integration day, not during it.
+4. **Geopoints for the map.** The map needs `lat` / `lon` for each site, but
+   `silver.trial_sites` currently stores only facility_name / city / state /
+   country — no coordinates. Can whoever owns the schemas add `lat` and `lon`
+   columns to `silver.trial_sites` (extracted from the `geoPoint` field in the
+   raw data, ~97.7% coverage)? Without them the map can only show placeholder
+   locations.
