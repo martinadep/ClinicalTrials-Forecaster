@@ -130,3 +130,9 @@ model code.
    columns to `silver.trial_sites` (extracted from the `geoPoint` field in the
    raw data, ~97.7% coverage)? Without them the map can only show placeholder
    locations.
+5. **Geographic level (I'll align the dashboard to your answer).** The dashboard
+   currently asks for generic "regions", while the data is structured as
+   facility / city / state / country. I can update the dashboard to match — I
+   just need the team to confirm: at which level does the user pick candidates
+   and at which level is the ranking returned (country? city? individual
+   facilities)? Once decided, I'll align the field names and selection level.
