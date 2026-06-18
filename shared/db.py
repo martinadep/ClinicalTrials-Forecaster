@@ -52,106 +52,86 @@ def _upsert_raw_trial(cur, fields, raw_payload):
     return raw_id
 
 
-def _build_trial_values(raw_id, fields, psycopg2_extras):
+def _build_trial_values(fields, psycopg2_extras):
     """Build positional values tuple for bronze.trials write operations."""
+    lead_sponsor = fields.get("lead_sponsor")
+    lead_sponsor_class = None
+    if isinstance(lead_sponsor, dict):
+        lead_sponsor_class = lead_sponsor.get("class")
+    if lead_sponsor_class is None:
+        lead_sponsor_class = fields.get("organization_class")
+
     return (
-        raw_id,
         fields["nct_id"],
-        fields["payload_hash"],
         fields["brief_title"],
-        fields["official_title"],
-        fields["acronym"],
+        fields.get("brief_summary"),
         psycopg2_extras.Json(fields["conditions"]) if fields["conditions"] is not None else None,
-        psycopg2_extras.Json(fields["keywords"]) if fields["keywords"] is not None else None,
         fields["study_type"],
         fields["phases"],
-        fields["allocation"],
-        fields["intervention_model"],
         fields["primary_purpose"],
         fields["enrollment_count"],
-        fields["enrollment_type"],
         fields["overall_status"],
         fields["start_date"],
         fields["primary_completion_date"],
-        fields["completion_date"],
-        fields["study_first_post_date"],
-        fields["last_update_post_date"],
-        psycopg2_extras.Json(fields["lead_sponsor"]) if fields["lead_sponsor"] else None,
-        fields["organization_class"],
-        psycopg2_extras.Json(fields["responsible_party"]) if fields["responsible_party"] else None,
+        lead_sponsor_class,
+        fields.get("collaborator_names"),
         fields["eligibility_criteria"],
         fields["healthy_volunteers"],
         fields["sex"],
         fields["minimum_age"],
         fields["maximum_age"],
         psycopg2_extras.Json(fields["locations"]) if fields["locations"] else None,
-        fields["version_holder"],
     )
 
 
-def _upsert_trial_row(cur, trial_values, nct_id, payload_hash):
-    """Insert or update bronze.trials row based on nct_id and payload_hash."""
+def _upsert_trial_row(cur, trial_values, nct_id):
+    """Insert or update bronze.trials row based on nct_id."""
     existing_trial = None
     if nct_id:
-        cur.execute("SELECT id, payload_hash FROM bronze.trials WHERE nct_id = %s LIMIT 1", (nct_id,))
+        cur.execute("SELECT id FROM bronze.trials WHERE nct_id = %s LIMIT 1", (nct_id,))
         existing_trial = cur.fetchone()
 
     if existing_trial:
-        existing_id, existing_trial_hash = existing_trial
-        if existing_trial_hash != payload_hash:
-            cur.execute(
-                """
-                UPDATE bronze.trials
-                SET
-                    raw_id = %s,
-                    nct_id = %s,
-                    payload_hash = %s,
-                    brief_title = %s,
-                    official_title = %s,
-                    acronym = %s,
-                    conditions = %s,
-                    keywords = %s,
-                    study_type = %s,
-                    phases = %s,
-                    allocation = %s,
-                    intervention_model = %s,
-                    primary_purpose = %s,
-                    enrollment_count = %s,
-                    enrollment_type = %s,
-                    overall_status = %s,
-                    start_date = %s,
-                    primary_completion_date = %s,
-                    completion_date = %s,
-                    study_first_post_date = %s,
-                    last_update_post_date = %s,
-                    lead_sponsor = %s,
-                    organization_class = %s,
-                    responsible_party = %s,
-                    eligibility_criteria = %s,
-                    healthy_volunteers = %s,
-                    sex = %s,
-                    minimum_age = %s,
-                    maximum_age = %s,
-                    locations = %s,
-                    version_holder = %s,
-                    updated_at = NOW()
-                WHERE id = %s
-                """,
-                trial_values + (existing_id,),
-            )
+        existing_id = existing_trial[0]
+        cur.execute(
+            """
+            UPDATE bronze.trials
+            SET
+                nct_id = %s,
+                brief_title = %s,
+                brief_summary = %s,
+                conditions = %s,
+                study_type = %s,
+                phases = %s,
+                primary_purpose = %s,
+                enrollment_count = %s,
+                overall_status = %s,
+                start_date = %s,
+                primary_completion_date = %s,
+                lead_sponsor_class = %s,
+                collaborator_names = %s,
+                eligibility_criteria = %s,
+                healthy_volunteers = %s,
+                sex = %s,
+                minimum_age = %s,
+                maximum_age = %s,
+                locations = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            trial_values + (existing_id,),
+        )
         return
 
     cur.execute(
         """
         INSERT INTO bronze.trials (
-            raw_id, nct_id, payload_hash, brief_title, official_title, acronym,
-            conditions, keywords, study_type, phases, allocation,
-            intervention_model, primary_purpose, enrollment_count, enrollment_type,
-            overall_status, start_date, primary_completion_date, completion_date,
-            study_first_post_date, last_update_post_date, lead_sponsor, organization_class,
-            responsible_party, eligibility_criteria, healthy_volunteers, sex, minimum_age,
-            maximum_age, locations, version_holder
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            nct_id, brief_title, brief_summary, conditions, study_type, phases,
+            primary_purpose, enrollment_count, overall_status, start_date,
+            primary_completion_date, lead_sponsor_class, collaborator_names,
+            eligibility_criteria, healthy_volunteers, sex, minimum_age, maximum_age,
+            locations
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """,
         trial_values,
     )
@@ -177,8 +157,8 @@ def insert_study_into_db(study, dsn=None):
         with conn:
             with conn.cursor() as cur:
                 raw_id = _upsert_raw_trial(cur, fields, raw_payload)
-                trial_values = _build_trial_values(raw_id, fields, psycopg2.extras)
-                _upsert_trial_row(cur, trial_values, fields["nct_id"], fields["payload_hash"])
+                trial_values = _build_trial_values(fields, psycopg2.extras)
+                _upsert_trial_row(cur, trial_values, fields["nct_id"])
                 return raw_id
     finally:
         conn.close()

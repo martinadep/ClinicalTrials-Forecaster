@@ -39,6 +39,7 @@ def extract_trial_fields(study):
     sponsor = protocol.get("sponsorCollaboratorsModule", {})
     eligibility = protocol.get("eligibilityModule", {})
     derived = study.get("derivedSection", {})
+    description = protocol.get("descriptionModule", {})
 
     design_info = design.get("designInfo", {})
     enrollment = design.get("enrollmentInfo", {})
@@ -47,6 +48,7 @@ def extract_trial_fields(study):
         "nct_id": identification.get("nctId"),
         "payload_hash": stable_payload_hash(study),
         "brief_title": identification.get("briefTitle"),
+        "brief_summary": description.get("briefSummary"),
         "official_title": identification.get("officialTitle"),
         "acronym": identification.get("acronym"),
         "conditions": protocol.get("conditionsModule", {}).get("conditions"),
@@ -66,6 +68,7 @@ def extract_trial_fields(study):
         "last_update_post_date": parse_date(status.get("lastUpdatePostDateStruct", {}).get("date") if status.get("lastUpdatePostDateStruct") else None),
         "lead_sponsor": sponsor.get("leadSponsor"),
         "organization_class": identification.get("organization", {}).get("class") if identification.get("organization") else None,
+        "collaborator_names": [c.get("name") for c in sponsor.get("collaborators", []) if c.get("name")],
         "responsible_party": sponsor.get("responsibleParty"),
         "eligibility_criteria": eligibility.get("eligibilityCriteria"),
         "healthy_volunteers": eligibility.get("healthyVolunteers"),

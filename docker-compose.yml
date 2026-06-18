@@ -83,4 +83,6 @@ services:
 
 volumes:
   postgres_data:
+    name: postgres_data
   kafka_data:
+    name: kafka_data
