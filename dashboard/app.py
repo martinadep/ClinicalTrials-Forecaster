@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import random
 
-st.title("🏥 Clinical Trial Site Recommender")
-st.write("Enter your trial details in the sidebar to find out where to recruit participants faster.")
+st.title("Clinical Trial Site Recommender")
+st.write("Fill in your trial information in the sidebar to discover quicker participant sourcing locations.")
 
 # Provisional list of conditions (placeholder).
 # Will later be replaced by the real MeSH terms extracted from the dataset.
