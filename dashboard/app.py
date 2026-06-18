@@ -3,7 +3,12 @@ import pandas as pd
 import random
 
 st.title("Clinical Trial Site Recommender")
-st.write("Fill in your trial information in the sidebar to discover quicker participant sourcing locations.")
+st.write(
+    "This dashboard helps researchers planning a new clinical trial decide **where** "
+    "to run it. Given the trial's design, it estimates how quickly each candidate "
+    "site or region is likely to recruit patients, and ranks them from fastest to slowest."
+)
+
 
 # Provisional list of conditions (placeholder).
 # Will later be replaced by the real MeSH terms extracted from the dataset.
