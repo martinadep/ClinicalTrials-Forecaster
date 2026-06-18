@@ -91,6 +91,14 @@ if run:
 
         st.header("Recommended sites")
         st.write(f"Ranked by predicted recruitment velocity for **{condition}**:")
+
+        # Highlight the top recommendation (row 0, the best one)
+        best = ranking.iloc[0]
+        st.success(
+            f"**Top recommendation: {best['Site']}** "
+            f"({best['Region']}) — {best['Predicted velocity (patients/month)']} patients/month"
+        )
+
         st.dataframe(
             ranking[["Site", "Region", "Predicted velocity (patients/month)"]],
             use_container_width=True,
