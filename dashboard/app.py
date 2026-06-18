@@ -99,4 +99,4 @@ if run:
         st.subheader("Site locations")
         st.map(ranking[["lat", "lon"]])
 else:
-    st.info("👈 Fill in the trial details in the sidebar and click **Recommend sites**.")
+    st.info("← Fill in the trial details in the sidebar and click **Recommend sites**.")
