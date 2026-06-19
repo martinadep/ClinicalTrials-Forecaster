@@ -82,7 +82,7 @@ def generate_and_insert_mock_data():
                     """, (site["country"], site["city"], site["zip"], cond, cond_trials))
 
         print("Generating gold.trial_features...")
-        for i in range(1, 101):
+        for i in range(1, 1001):
             nct_id = f"NCT{str(i).zfill(8)}"
             study_type = random.choice(STUDY_TYPES)
             primary_purpose = random.choice(PURPOSES)
