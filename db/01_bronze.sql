@@ -10,8 +10,7 @@ CREATE TABLE IF NOT EXISTS bronze.raw_trials (
 );
 
 CREATE TABLE IF NOT EXISTS bronze.trials (
-    id                        SERIAL PRIMARY KEY,
-    nct_id                    TEXT REFERENCES bronze.raw_trials(nct_id) ON DELETE SET NULL,
+    nct_id                    TEXT PRIMARY KEY,
     brief_title               TEXT,
     brief_summary             TEXT,
     conditions                JSONB,
