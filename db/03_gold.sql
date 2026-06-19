@@ -3,10 +3,16 @@ CREATE SCHEMA IF NOT EXISTS gold;
 CREATE TABLE IF NOT EXISTS gold.site_history (
     facility_name             TEXT,
     country                   TEXT,
+    city                      TEXT,      
+    state                     TEXT,      
+    zip                       TEXT,      
+    latitude                  NUMERIC,   
+    longitude                 NUMERIC,
     n_trials                  INTEGER, 
     avg_velocity              NUMERIC, 
     last_year                 INTEGER, 
-    PRIMARY KEY (facility_name, country)
+    
+    PRIMARY KEY (facility_name, country, city, zip)
 );
 
 CREATE TABLE IF NOT EXISTS gold.trial_features (
@@ -16,14 +22,15 @@ CREATE TABLE IF NOT EXISTS gold.trial_features (
     lead_sponsor_class        TEXT,
     sex                       TEXT,
     healthy_volunteers        BOOLEAN,
-    
-    -- engineered features
+    phase                     TEXT,
     enrollment_count          INTEGER,
-    num_facilities            INTEGER, 
-    num_collaborators         INTEGER, 
+    n_sites                   INTEGER, 
+     
     num_conditions            INTEGER, 
     duration_months           NUMERIC,
-    avg_site_vel              NUMERIC, 
+    
+    avg_site_exp              NUMERIC, -- average n_trials of participating sites
+    avg_site_vel              NUMERIC, -- average velocity of participating sites
     
     -- TARGET Y --------
     TARGET_velocity           NUMERIC 

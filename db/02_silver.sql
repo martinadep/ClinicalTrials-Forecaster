@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS silver.trials (
     sex                       TEXT,
     minimum_age_years         NUMERIC,
     maximum_age_years         NUMERIC,
-    enrollment_duration_days  INTEGER,   
+    enrollment_duration_months NUMERIC,
+    trial_velocity            NUMERIC,   
     transformed_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -27,10 +28,13 @@ CREATE TABLE IF NOT EXISTS silver.trial_sites (
     facility_name             TEXT,
     city                      TEXT,
     state                     TEXT,
+    zip                       TEXT,
     country                   TEXT,
+    latitude                  NUMERIC,
+    longitude                 NUMERIC,
+    conditions                TEXT[],
     transformed_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_silver_duration ON silver.trials(enrollment_duration_days);
-CREATE INDEX IF NOT EXISTS idx_sites_geo ON silver.trial_sites(country, state, city);
-CREATE INDEX IF NOT EXISTS idx_sites_facility ON silver.trial_sites(facility_name);
+CREATE INDEX IF NOT EXISTS idx_silver_sites_geo ON silver.trial_sites(country, state, city, zip);
+CREATE INDEX IF NOT EXISTS idx_silver_sites_nct_id ON silver.trial_sites(nct_id);
