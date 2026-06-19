@@ -1,18 +1,29 @@
 CREATE SCHEMA IF NOT EXISTS gold;
 
 CREATE TABLE IF NOT EXISTS gold.site_history (
-    facility_name             TEXT,
     country                   TEXT,
     city                      TEXT,      
     state                     TEXT,      
-    zip                       TEXT,      
+    zip                       TEXT,     
+    facility_name             TEXT, 
     latitude                  NUMERIC,   
     longitude                 NUMERIC,
-    n_trials                  INTEGER, 
-    avg_velocity              NUMERIC, 
+    n_trials                  INTEGER,   
+    avg_velocity              NUMERIC,   
     last_year                 INTEGER, 
     
-    PRIMARY KEY (facility_name, country, city, zip)
+    PRIMARY KEY (country, city, zip)
+);
+
+CREATE TABLE IF NOT EXISTS gold.site_conditions_history (
+    country                   TEXT,
+    city                      TEXT,
+    zip                       TEXT,
+    condition_name            TEXT,    
+    n_trials_for_condition    INTEGER, 
+    
+    PRIMARY KEY (country, city, zip, condition_name),
+    FOREIGN KEY (country, city, zip) REFERENCES gold.site_history(country, city, zip) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS gold.trial_features (
