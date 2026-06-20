@@ -89,15 +89,23 @@ def main():
     spark.sparkContext.setLogLevel("ERROR") 
 
     trials_df = read_table(spark, jdbc_url, jdbc_props, "silver.trials").cache()
-    sites_df = read_table(spark, jdbc_url, jdbc_props, "silver.trial_sites").cache()
+    
+    # MODIFIED: Filter out source sites that don't have a facility name (null or blank)
+    raw_sites_df = read_table(spark, jdbc_url, jdbc_props, "silver.trial_sites")
+    sites_df = raw_sites_df.filter(
+        F.col("facility_name").isNotNull() & (F.trim(F.col("facility_name")) != "")
+    ).cache()
 
     trials_df = trials_df.filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150))
     trials_df = trials_df.filter(F.col("study_type") == "INTERVENTIONAL")
 
-
+    # MODIFIED: Added facility_name filters inside the push-down SQL queries where applicable
     site_conditions_count_df = read_table(
         spark, jdbc_url, jdbc_props,
-        "(SELECT nct_id, array_length(conditions, 1) AS silver_num_conditions FROM silver.trial_sites) AS sc",
+        """(SELECT nct_id, array_length(conditions, 1) AS silver_num_conditions 
+            FROM silver.trial_sites 
+            WHERE facility_name IS NOT NULL AND TRIM(facility_name) != ''
+           ) AS sc""",
     )
 
     exploded_conditions_df = read_table(
@@ -106,6 +114,7 @@ def main():
         (SELECT nct_id, facility_name, city, state, zip, country, unnest(conditions) AS condition_name
          FROM silver.trial_sites
          WHERE conditions IS NOT NULL AND country IS NOT NULL AND city IS NOT NULL AND zip IS NOT NULL
+           AND facility_name IS NOT NULL AND TRIM(facility_name) != ''
         ) AS sc_exploded
         """,
     )
@@ -178,46 +187,6 @@ def main():
             F.avg("avg_velocity").alias("avg_site_vel"),
         )
     )
-
-    # # Costruzione finale del dataset per il Machine Learning (Senza healthy_volunteers)
-    # trial_features_df = (
-    #     trials_df.select(
-    #         "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex", "phase",
-    #         "enrollment_count", "enrollment_duration_months", "trial_velocity",
-    #     )
-    #     .withColumnRenamed("enrollment_duration_months", "duration_months")
-    #     .withColumnRenamed("trial_velocity", "target_velocity")
-    #     .join(num_conditions_df, on="nct_id", how="left")
-    #     .join(n_sites_df, on="nct_id", how="left")
-    #     .join(site_stats_per_trial, on="nct_id", how="left")
-
-    #     # remove trials with no sites or no site history (avg_site_exp/vel null)
-    #     .filter(
-    #         (F.col("n_sites") > 0) & 
-    #         (F.col("avg_site_exp").isNotNull()) & 
-    #         (F.col("avg_site_vel").isNotNull())
-    #     )
-        
-    #     .withColumn("num_conditions", F.coalesce(F.col("silver_num_conditions"), F.lit(1))) # Default 1 se assente
-    #     .select(
-    #         "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex",
-    #         "phase", "enrollment_count", "n_sites", "num_conditions",
-    #         "duration_months", "avg_site_exp", "avg_site_vel", "target_velocity",
-    #     )
-    # )
-
-    # trial_features_df.foreachPartition(upsert_trial_features_partition)
-    # trial_features_rows_written = trial_features_df.count()
-
-    # print(
-    #     f"[INFO]: silver_to_gold: trials_read={total_trials} sites_read={total_sites} "
-    #     f"sites_skipped(no country/city/zip)={skipped_sites_no_geo_key} "
-    #     f"trials_with_null_velocity={null_velocity_count} "
-    #     f"site_history_written={site_history_rows_written} "
-    #     f"trial_features_written={trial_features_rows_written}"
-    # )
-
-    # spark.stop()
     
     raw_features_df = (
         trials_df.select(
@@ -234,10 +203,9 @@ def main():
     )
 
     # ---- CALCOLO DEI FILTRI E DEI RECORD RIMOSSI ----
-    # 1. Contiamo quanti ne abbiamo prima del filtro geografico/siti
     total_features_before_filter = raw_features_df.count()
 
-    # 2. Applichiamo il filtro protettivo per eliminare i trial senza centri clinici
+    # Applichiamo il filtro protettivo per eliminare i trial senza centri clinici
     trial_features_df = raw_features_df.filter(
         (F.col("n_sites") > 0) & 
         (F.col("avg_site_exp").isNotNull()) & 
@@ -248,7 +216,6 @@ def main():
         "duration_months", "avg_site_exp", "avg_site_vel", "target_velocity",
     )
 
-    # 3. Calcoliamo quanti trial abbiamo scritto e quanti sono stati scartati
     trial_features_rows_written = trial_features_df.count()
     removed_trials_count = total_features_before_filter - trial_features_rows_written
 
@@ -264,8 +231,8 @@ def main():
         f"[INFO]: -------------------------------------------------------- \n"
         f"[INFO]: FILTER REPORT FOR ML (gold.trial_features): \n"
         f"[INFO]:   -> Total available trials: {total_features_before_filter} \n"
-        f"[INFO]:   -> SCARTATI (Trial senza siti o dati corrotti): {removed_trials_count} \n"
-        f"[INFO]:   -> SCRITTI CORRETTAMENTE IN GOLD: {trial_features_rows_written} "
+        f"[INFO]:   -> DISCARDED: {removed_trials_count} \n"
+        f"[INFO]:   -> KEPT: {trial_features_rows_written} "
         f"({((trial_features_rows_written/total_features_before_filter)*100):.2f}% del totale)"
     )
 
