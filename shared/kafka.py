@@ -15,8 +15,8 @@ def delivery_report(err, msg):
     """Callback called once for each produced message to confirm delivery."""
     if err is not None:
         print(f"[ERR]: Kafka delivery failed: {err}")
-    else:
-        print(f"[INFO]: Produced to {msg.topic()} partition {msg.partition()}")
+    # else:
+    #     print(f"[INFO]: Produced to {msg.topic()} partition {msg.partition()}")
 
 
 def produce_study_to_kafka(producer, study):

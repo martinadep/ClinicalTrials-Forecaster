@@ -2,19 +2,7 @@
 Silver -> Gold ETL job.
 
 Batch-reads the full silver.trials / silver.trial_sites tables from Postgres via
-Spark JDBC (no Kafka involved -- gold is an aggregate over the whole dataset, so
-it's inherently a full-table batch job, not a per-message one), computes the gold
-tables, and writes them back to Postgres.
-
-Run via spark-submit (see docker-compose `spark` service) from the project root so
-that `shared.*` imports resolve, e.g.:
-
-    spark-submit --master local[*] \
-        --packages org.postgresql:postgresql:42.7.3 \
-        spark_jobs/silver_to_gold.py
-
-Only the Postgres JDBC driver is needed (no spark-sql-kafka package), since this
-job neither reads nor writes Kafka.
+Spark JDBC, computes the gold tables, and writes them back to Postgres.
 """
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
@@ -28,11 +16,7 @@ def read_table(spark, jdbc_url, properties, dbtable):
 
 
 def truncate_tables(table_names):
-    """Truncate gold tables before a full recompute.
-
-    Postgres requires a table and anything FK-referencing it to be truncated in the
-    same statement, so all tables are passed to a single TRUNCATE call.
-    """
+    """Truncate gold tables before a full recompute."""
     import psycopg2
 
     dsn = build_dsn_from_env()
@@ -46,7 +30,10 @@ def truncate_tables(table_names):
 
 
 def upsert_trial_features_partition(rows):
-    """Upsert a partition of gold.trial_features rows, keyed by nct_id."""
+    """Upsert a partition of gold.trial_features rows, keyed by nct_id.
+
+    Rimossa la colonna healthy_volunteers.
+    """
     import psycopg2
     import psycopg2.extras
 
@@ -63,7 +50,7 @@ def upsert_trial_features_partition(rows):
                     """
                     INSERT INTO gold.trial_features (
                         nct_id, study_type, primary_purpose, lead_sponsor_class, sex,
-                        healthy_volunteers, phase, enrollment_count, n_sites, num_conditions,
+                        phase, enrollment_count, n_sites, num_conditions,
                         duration_months, avg_site_exp, avg_site_vel, target_velocity
                     ) VALUES %s
                     ON CONFLICT (nct_id) DO UPDATE SET
@@ -71,7 +58,6 @@ def upsert_trial_features_partition(rows):
                         primary_purpose = EXCLUDED.primary_purpose,
                         lead_sponsor_class = EXCLUDED.lead_sponsor_class,
                         sex = EXCLUDED.sex,
-                        healthy_volunteers = EXCLUDED.healthy_volunteers,
                         phase = EXCLUDED.phase,
                         enrollment_count = EXCLUDED.enrollment_count,
                         n_sites = EXCLUDED.n_sites,
@@ -84,12 +70,12 @@ def upsert_trial_features_partition(rows):
                     [
                         (
                             r.nct_id, r.study_type, r.primary_purpose, r.lead_sponsor_class, r.sex,
-                            r.healthy_volunteers, r.phase, r.enrollment_count, r.n_sites, r.num_conditions,
+                            r.phase, r.enrollment_count, r.n_sites, r.num_conditions,
                             r.duration_months, r.avg_site_exp, r.avg_site_vel, r.target_velocity,
                         )
                         for r in rows
                     ],
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 )
     finally:
         conn.close()
@@ -99,29 +85,21 @@ def main():
     load_dotenv()
     jdbc_url, jdbc_props = build_jdbc_url_from_env()
     spark = SparkSession.builder.appName("silver_to_gold").getOrCreate()
+    
+    spark.sparkContext.setLogLevel("ERROR") 
 
     trials_df = read_table(spark, jdbc_url, jdbc_props, "silver.trials").cache()
     sites_df = read_table(spark, jdbc_url, jdbc_props, "silver.trial_sites").cache()
-    # Pushed down to Postgres: phases[1] avoids dealing with Postgres TEXT[] <-> Spark
-    # array-type JDBC mapping for a single scalar value; jsonb_array_length() is the
-    # fallback source for num_conditions on trials with zero silver.trial_sites rows.
-    bronze_df = read_table(
-        spark, jdbc_url, jdbc_props,
-        """
-        (SELECT nct_id, phases[1] AS phase,
-                jsonb_array_length(coalesce(conditions, '[]'::jsonb)) AS bronze_num_conditions
-         FROM bronze.trials) AS bronze_trials
-        """,
-    )
-    # conditions is denormalized onto every site row by bronze_to_silver.py, so any one
-    # site's array length equals the trial's condition count -- read it pre-flattened
-    # here rather than pulling the raw TEXT[] into Spark.
+
+    trials_df = trials_df.filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150))
+    trials_df = trials_df.filter(F.col("study_type") == "INTERVENTIONAL")
+
+
     site_conditions_count_df = read_table(
         spark, jdbc_url, jdbc_props,
         "(SELECT nct_id, array_length(conditions, 1) AS silver_num_conditions FROM silver.trial_sites) AS sc",
     )
-    # Pre-flattened (nct_id, condition) pairs for gold.site_conditions_history, again
-    # avoiding Spark-side handling of the Postgres TEXT[] column.
+
     exploded_conditions_df = read_table(
         spark, jdbc_url, jdbc_props,
         """
@@ -140,16 +118,18 @@ def main():
     )
     skipped_sites_no_geo_key = total_sites - sites_with_geo_key.count()
 
-    # ---- Step 1: per-trial velocity is already computed by bronze_to_silver.py ----
-    # silver.trials.trial_velocity IS the target velocity; enrollment_duration_months
-    # IS the gold duration_months. No recomputation needed here.
     null_velocity_count = trials_df.filter(F.col("trial_velocity").isNull()).count()
 
     # ---- Step 2a: gold.site_history ----
-    # Back-assign each trial's velocity onto its sites, then aggregate per (country, city, zip).
     sites_with_velocity = sites_with_geo_key.join(
         trials_df.select("nct_id", "trial_velocity", "start_date"), on="nct_id", how="left"
     )
+    
+    # Gestione Nulli ed Anomalie: Forziamo a 0 la velocity se assente
+    sites_with_velocity = sites_with_velocity.withColumn(
+        "trial_velocity", F.coalesce(F.col("trial_velocity"), F.lit(0.0))
+    )
+
     site_history_df = (
         sites_with_velocity.groupBy("country", "city", "zip")
         .agg(
@@ -170,6 +150,7 @@ def main():
         .agg(F.countDistinct("nct_id").alias("n_trials_for_condition"))
     )
 
+    # Scrittura tabelle storiche dei siti
     truncate_tables(["gold.site_conditions_history", "gold.site_history"])
     site_history_df.write.jdbc(url=jdbc_url, table="gold.site_history", mode="append", properties=jdbc_props)
     site_conditions_history_df.write.jdbc(
@@ -177,7 +158,7 @@ def main():
     )
     site_history_rows_written = site_history_df.count()
 
-    # ---- Step 3: gold.trial_features (uses Step 2's site_history) ----
+    # ---- Step 3: gold.trial_features ----
     num_conditions_df = (
         site_conditions_count_df.groupBy("nct_id")
         .agg(F.first("silver_num_conditions", ignorenulls=True).alias("silver_num_conditions"))
@@ -185,12 +166,6 @@ def main():
 
     n_sites_df = sites_df.groupBy("nct_id").agg(F.count("*").alias("n_sites"))
 
-    # avg_site_exp / avg_site_vel: average the just-written site_history stats across
-    # each trial's own sites.
-    # KNOWN LIMITATION (accepted project simplification, not fixed here): site_history is
-    # computed over ALL-TIME trials, including the trial's own velocity/count. This is
-    # mild target leakage for avg_site_vel in particular. A production version would
-    # compute site stats using only trials completed before this trial's start_date.
     site_stats_per_trial = (
         sites_with_geo_key.join(
             site_history_df.select("country", "city", "zip", "n_trials", "avg_velocity"),
@@ -204,35 +179,94 @@ def main():
         )
     )
 
-    trial_features_df = (
+    # # Costruzione finale del dataset per il Machine Learning (Senza healthy_volunteers)
+    # trial_features_df = (
+    #     trials_df.select(
+    #         "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex", "phase",
+    #         "enrollment_count", "enrollment_duration_months", "trial_velocity",
+    #     )
+    #     .withColumnRenamed("enrollment_duration_months", "duration_months")
+    #     .withColumnRenamed("trial_velocity", "target_velocity")
+    #     .join(num_conditions_df, on="nct_id", how="left")
+    #     .join(n_sites_df, on="nct_id", how="left")
+    #     .join(site_stats_per_trial, on="nct_id", how="left")
+
+    #     # remove trials with no sites or no site history (avg_site_exp/vel null)
+    #     .filter(
+    #         (F.col("n_sites") > 0) & 
+    #         (F.col("avg_site_exp").isNotNull()) & 
+    #         (F.col("avg_site_vel").isNotNull())
+    #     )
+        
+    #     .withColumn("num_conditions", F.coalesce(F.col("silver_num_conditions"), F.lit(1))) # Default 1 se assente
+    #     .select(
+    #         "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex",
+    #         "phase", "enrollment_count", "n_sites", "num_conditions",
+    #         "duration_months", "avg_site_exp", "avg_site_vel", "target_velocity",
+    #     )
+    # )
+
+    # trial_features_df.foreachPartition(upsert_trial_features_partition)
+    # trial_features_rows_written = trial_features_df.count()
+
+    # print(
+    #     f"[INFO]: silver_to_gold: trials_read={total_trials} sites_read={total_sites} "
+    #     f"sites_skipped(no country/city/zip)={skipped_sites_no_geo_key} "
+    #     f"trials_with_null_velocity={null_velocity_count} "
+    #     f"site_history_written={site_history_rows_written} "
+    #     f"trial_features_written={trial_features_rows_written}"
+    # )
+
+    # spark.stop()
+    
+    raw_features_df = (
         trials_df.select(
-            "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex",
-            "healthy_volunteers", "enrollment_count", "enrollment_duration_months", "trial_velocity",
+            "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex", "phase",
+            "enrollment_count", "enrollment_duration_months", "trial_velocity",
         )
         .withColumnRenamed("enrollment_duration_months", "duration_months")
         .withColumnRenamed("trial_velocity", "target_velocity")
-        .join(bronze_df, on="nct_id", how="left")
         .join(num_conditions_df, on="nct_id", how="left")
         .join(n_sites_df, on="nct_id", how="left")
         .join(site_stats_per_trial, on="nct_id", how="left")
         .withColumn("n_sites", F.coalesce(F.col("n_sites"), F.lit(0)))
-        .withColumn("num_conditions", F.coalesce(F.col("silver_num_conditions"), F.col("bronze_num_conditions")))
-        .select(
-            "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex",
-            "healthy_volunteers", "phase", "enrollment_count", "n_sites", "num_conditions",
-            "duration_months", "avg_site_exp", "avg_site_vel", "target_velocity",
-        )
+        .withColumn("num_conditions", F.coalesce(F.col("silver_num_conditions"), F.lit(1)))
     )
 
-    trial_features_df.foreachPartition(upsert_trial_features_partition)
-    trial_features_rows_written = trial_features_df.count()
+    # ---- CALCOLO DEI FILTRI E DEI RECORD RIMOSSI ----
+    # 1. Contiamo quanti ne abbiamo prima del filtro geografico/siti
+    total_features_before_filter = raw_features_df.count()
 
+    # 2. Applichiamo il filtro protettivo per eliminare i trial senza centri clinici
+    trial_features_df = raw_features_df.filter(
+        (F.col("n_sites") > 0) & 
+        (F.col("avg_site_exp").isNotNull()) & 
+        (F.col("avg_site_vel").isNotNull())
+    ).select(
+        "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex",
+        "phase", "enrollment_count", "n_sites", "num_conditions",
+        "duration_months", "avg_site_exp", "avg_site_vel", "target_velocity",
+    )
+
+    # 3. Calcoliamo quanti trial abbiamo scritto e quanti sono stati scartati
+    trial_features_rows_written = trial_features_df.count()
+    removed_trials_count = total_features_before_filter - trial_features_rows_written
+
+    # ---- Scrittura in modalità Upsert su Postgres ----
+    trial_features_df.foreachPartition(upsert_trial_features_partition)
+
+    # ---- PRINT DI LOG AGGIORNATO E DETTAGLIATO ----
     print(
-        f"[INFO]: silver_to_gold: trials_read={total_trials} sites_read={total_sites} "
-        f"sites_skipped(no country/city/zip)={skipped_sites_no_geo_key} "
-        f"trials_with_null_velocity={null_velocity_count} "
-        f"site_history_written={site_history_rows_written} "
-        f"trial_features_written={trial_features_rows_written}"
+        f"[INFO]: silver_to_gold: trials_read={total_trials} sites_read={total_sites} \n"
+        f"[INFO]: sites_skipped(no country/city/zip)={skipped_sites_no_geo_key} \n"
+        f"[INFO]: trials_with_null_velocity={null_velocity_count} \n"
+        f"[INFO]: site_history_written={site_history_rows_written} \n"
+        f"[INFO]: -------------------------------------------------------- \n"
+        f"[INFO]: FILTER REPORT FOR ML (gold.trial_features): \n"
+        f"[INFO]:   -> Total available trials: {total_features_before_filter} \n"
+        f"[INFO]:   -> SCARTATI (Trial senza siti o dati corrotti): {removed_trials_count} \n"
+        f"[INFO]:   -> SCRITTI CORRETTAMENTE IN GOLD: {trial_features_rows_written} "
+        f"({((trial_features_rows_written/total_features_before_filter)*100):.2f}% del totale)"
     )
 
     spark.stop()
