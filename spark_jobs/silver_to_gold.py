@@ -90,21 +90,25 @@ def main():
 
     trials_df = read_table(spark, jdbc_url, jdbc_props, "silver.trials").cache()
     
-    # MODIFIED: Filter out source sites that don't have a facility name (null or blank)
+    # 1. Filtro centralizzato lato Spark per i siti storici
     raw_sites_df = read_table(spark, jdbc_url, jdbc_props, "silver.trial_sites")
     sites_df = raw_sites_df.filter(
-        F.col("facility_name").isNotNull() & (F.trim(F.col("facility_name")) != "")
+        F.col("facility_name").isNotNull() & 
+        (F.trim(F.col("facility_name")) != "") &
+        (F.upper(F.trim(F.col("facility_name"))) != "UNKNOWN FACILITY")
     ).cache()
 
     trials_df = trials_df.filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150))
     trials_df = trials_df.filter(F.col("study_type") == "INTERVENTIONAL")
 
-    # MODIFIED: Added facility_name filters inside the push-down SQL queries where applicable
+    # 2. MODIFICATO: Allineati i filtri SQL push-down includendo l'esclusione di 'UNKNOWN FACILITY'
     site_conditions_count_df = read_table(
         spark, jdbc_url, jdbc_props,
         """(SELECT nct_id, array_length(conditions, 1) AS silver_num_conditions 
             FROM silver.trial_sites 
-            WHERE facility_name IS NOT NULL AND TRIM(facility_name) != ''
+            WHERE facility_name IS NOT NULL 
+              AND TRIM(facility_name) != ''
+              AND UPPER(TRIM(facility_name)) != 'UNKNOWN FACILITY'
            ) AS sc""",
     )
 
@@ -114,11 +118,13 @@ def main():
         (SELECT nct_id, facility_name, city, state, zip, country, unnest(conditions) AS condition_name
          FROM silver.trial_sites
          WHERE conditions IS NOT NULL AND country IS NOT NULL AND city IS NOT NULL AND zip IS NOT NULL
-           AND facility_name IS NOT NULL AND TRIM(facility_name) != ''
+           AND facility_name IS NOT NULL 
+           AND TRIM(facility_name) != ''
+           AND UPPER(TRIM(facility_name)) != 'UNKNOWN FACILITY'
         ) AS sc_exploded
         """,
     )
-
+    
     total_trials = trials_df.count()
     total_sites = sites_df.count()
 
