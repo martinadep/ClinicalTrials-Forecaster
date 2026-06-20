@@ -77,9 +77,39 @@ services:
     ports:
       - "9000:9000"
     environment:
-      KAFKA_BROKERCONNECT: "kafka:29092" 
+      KAFKA_BROKERCONNECT: "kafka:29092"
     depends_on:
       - kafka
+
+  spark:
+    image: apache/spark:3.5.1
+    container_name: clinical_trial_spark
+    user: root
+    working_dir: /app
+    environment:
+      PYTHONPATH: /app
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC_BRONZE: trials.bronze
+      KAFKA_TOPIC_SILVER: trials.silver
+      POSTGRES_HOST: clinical_trial_db
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_PORT: 5432
+    volumes:
+      - .:/app
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    # Local mode (no separate master/worker cluster): the base image's pip is too old
+    # to resolve manylinux wheels, so upgrade it, then install the DB/Kafka client
+    # libs the job needs (not bundled in the base image), then stay up so jobs can
+    # be triggered with `docker exec clinical_trial_spark spark-submit ...`.
+    command: >
+      bash -c "pip3 install --upgrade pip && pip3 install --no-cache-dir psycopg2-binary==2.9.10 confluent-kafka==2.3.0 && tail -f /dev/null"
 
 volumes:
   postgres_data:

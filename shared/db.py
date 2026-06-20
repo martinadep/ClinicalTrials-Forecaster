@@ -12,6 +12,18 @@ def build_dsn_from_env():
     return None
 
 
+def build_jdbc_url_from_env():
+    """Build a (jdbc_url, properties) pair for Spark's spark.read.jdbc()/write.jdbc()."""
+    user = os.getenv("POSTGRES_USER")
+    password = os.getenv("POSTGRES_PASSWORD")
+    db = os.getenv("POSTGRES_DB")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    host = os.getenv("POSTGRES_HOST") or os.getenv("DB_HOST") or "localhost"
+    jdbc_url = f"jdbc:postgresql://{host}:{port}/{db}"
+    properties = {"user": user, "password": password, "driver": "org.postgresql.Driver"}
+    return jdbc_url, properties
+
+
 def _upsert_raw_trial(cur, fields, raw_payload):
     """Insert or update bronze.raw_trials row and return raw_id."""
     nct_id = fields["nct_id"]
@@ -85,44 +97,7 @@ def _build_trial_values(fields, psycopg2_extras):
 
 
 def _upsert_trial_row(cur, trial_values, nct_id):
-    """Insert or update bronze.trials row based on nct_id."""
-    existing_trial = None
-    if nct_id:
-        cur.execute("SELECT id FROM bronze.trials WHERE nct_id = %s LIMIT 1", (nct_id,))
-        existing_trial = cur.fetchone()
-
-    if existing_trial:
-        existing_id = existing_trial[0]
-        cur.execute(
-            """
-            UPDATE bronze.trials
-            SET
-                nct_id = %s,
-                brief_title = %s,
-                brief_summary = %s,
-                conditions = %s,
-                study_type = %s,
-                phases = %s,
-                primary_purpose = %s,
-                enrollment_count = %s,
-                overall_status = %s,
-                start_date = %s,
-                primary_completion_date = %s,
-                lead_sponsor_class = %s,
-                collaborator_names = %s,
-                eligibility_criteria = %s,
-                healthy_volunteers = %s,
-                sex = %s,
-                minimum_age = %s,
-                maximum_age = %s,
-                locations = %s,
-                updated_at = NOW()
-            WHERE id = %s
-            """,
-            trial_values + (existing_id,),
-        )
-        return
-
+    """Insert or update bronze.trials row based on nct_id (the table's primary key)."""
     cur.execute(
         """
         INSERT INTO bronze.trials (
@@ -132,6 +107,26 @@ def _upsert_trial_row(cur, trial_values, nct_id):
             eligibility_criteria, healthy_volunteers, sex, minimum_age, maximum_age,
             locations
         ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (nct_id) DO UPDATE SET
+            brief_title = EXCLUDED.brief_title,
+            brief_summary = EXCLUDED.brief_summary,
+            conditions = EXCLUDED.conditions,
+            study_type = EXCLUDED.study_type,
+            phases = EXCLUDED.phases,
+            primary_purpose = EXCLUDED.primary_purpose,
+            enrollment_count = EXCLUDED.enrollment_count,
+            overall_status = EXCLUDED.overall_status,
+            start_date = EXCLUDED.start_date,
+            primary_completion_date = EXCLUDED.primary_completion_date,
+            lead_sponsor_class = EXCLUDED.lead_sponsor_class,
+            collaborator_names = EXCLUDED.collaborator_names,
+            eligibility_criteria = EXCLUDED.eligibility_criteria,
+            healthy_volunteers = EXCLUDED.healthy_volunteers,
+            sex = EXCLUDED.sex,
+            minimum_age = EXCLUDED.minimum_age,
+            maximum_age = EXCLUDED.maximum_age,
+            locations = EXCLUDED.locations,
+            updated_at = NOW()
         """,
         trial_values,
     )
