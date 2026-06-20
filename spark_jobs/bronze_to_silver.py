@@ -18,6 +18,7 @@ import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
 from pyspark.sql.types import (
+    ArrayType,
     BooleanType,
     DoubleType,
     IntegerType,
@@ -50,7 +51,8 @@ TRIALS_SCHEMA = StructType([
     StructField("sex", StringType()),
     StructField("minimum_age_years", DoubleType()),
     StructField("maximum_age_years", DoubleType()),
-    StructField("enrollment_duration_days", IntegerType()),
+    StructField("enrollment_duration_months", DoubleType()),
+    StructField("trial_velocity", DoubleType()),
 ])
 
 SITES_SCHEMA = StructType([
@@ -58,12 +60,18 @@ SITES_SCHEMA = StructType([
     StructField("facility_name", StringType()),
     StructField("city", StringType()),
     StructField("state", StringType()),
+    StructField("zip", StringType()),
     StructField("country", StringType()),
+    StructField("latitude", DoubleType()),
+    StructField("longitude", DoubleType()),
+    StructField("conditions", ArrayType(StringType())),
 ])
 
+_DAYS_PER_MONTH = 30.44
 
-def _days_between(start_str, end_str):
-    """Days between two YYYY-MM-DD strings, or None if either is missing/invalid/negative."""
+
+def _duration_months(start_str, end_str):
+    """Months between two YYYY-MM-DD strings, or None if either is missing/invalid/negative."""
     import datetime
 
     if not start_str or not end_str:
@@ -73,8 +81,17 @@ def _days_between(start_str, end_str):
         end = datetime.date.fromisoformat(end_str)
     except ValueError:
         return None
-    delta = (end - start).days
-    return delta if delta >= 0 else None
+    delta_days = (end - start).days
+    if delta_days < 0:
+        return None
+    return round(delta_days / _DAYS_PER_MONTH, 2)
+
+
+def _trial_velocity(enrollment_count, duration_months):
+    """Enrollment rate in patients/month, or None if enrollment or duration is missing/zero."""
+    if not enrollment_count or not duration_months:
+        return None
+    return round(enrollment_count / duration_months, 4)
 
 
 def parse_study(json_str, kafka_ts):
@@ -100,6 +117,8 @@ def parse_study(json_str, kafka_ts):
 
     start_date = normalize_date(status.get("startDateStruct", {}).get("date"))
     primary_completion_date = normalize_date(status.get("primaryCompletionDateStruct", {}).get("date"))
+    enrollment_count = enrollment.get("count")
+    duration_months = _duration_months(start_date, primary_completion_date)
 
     trial = {
         "nct_id": nct_id,
@@ -109,15 +128,20 @@ def parse_study(json_str, kafka_ts):
         "primary_purpose": design_info.get("primaryPurpose"),
         "overall_status": status.get("overallStatus"),
         "lead_sponsor_class": sponsor.get("leadSponsor", {}).get("class"),
-        "enrollment_count": enrollment.get("count"),
+        "enrollment_count": enrollment_count,
         "start_date": start_date,
         "primary_completion_date": primary_completion_date,
         "healthy_volunteers": eligibility.get("healthyVolunteers"),
         "sex": eligibility.get("sex"),
         "minimum_age_years": parse_age_to_years(eligibility.get("minimumAge")),
         "maximum_age_years": parse_age_to_years(eligibility.get("maximumAge")),
-        "enrollment_duration_days": _days_between(start_date, primary_completion_date),
+        "enrollment_duration_months": duration_months,
+        "trial_velocity": _trial_velocity(enrollment_count, duration_months),
     }
+
+    # Denormalized onto every site row so gold.site_conditions_history can count
+    # trials per condition per location without joining back to silver.trials.
+    conditions = protocol.get("conditionsModule", {}).get("conditions") or []
 
     sites = [
         {
@@ -125,7 +149,11 @@ def parse_study(json_str, kafka_ts):
             "facility_name": loc.get("facility"),
             "city": loc.get("city"),
             "state": loc.get("state"),
+            "zip": loc.get("zip"),
             "country": loc.get("country"),
+            "latitude": loc.get("geoPoint", {}).get("lat"),
+            "longitude": loc.get("geoPoint", {}).get("lon"),
+            "conditions": conditions,
         }
         for loc in protocol.get("contactsLocationsModule", {}).get("locations", [])
     ]
@@ -153,7 +181,8 @@ def upsert_trials_partition(rows):
                         nct_id, brief_title, brief_summary, study_type, primary_purpose,
                         overall_status, lead_sponsor_class, enrollment_count, start_date,
                         primary_completion_date, healthy_volunteers, sex,
-                        minimum_age_years, maximum_age_years, enrollment_duration_days, transformed_at
+                        minimum_age_years, maximum_age_years, enrollment_duration_months,
+                        trial_velocity, transformed_at
                     ) VALUES %s
                     ON CONFLICT (nct_id) DO UPDATE SET
                         brief_title = EXCLUDED.brief_title,
@@ -169,7 +198,8 @@ def upsert_trials_partition(rows):
                         sex = EXCLUDED.sex,
                         minimum_age_years = EXCLUDED.minimum_age_years,
                         maximum_age_years = EXCLUDED.maximum_age_years,
-                        enrollment_duration_days = EXCLUDED.enrollment_duration_days,
+                        enrollment_duration_months = EXCLUDED.enrollment_duration_months,
+                        trial_velocity = EXCLUDED.trial_velocity,
                         transformed_at = EXCLUDED.transformed_at
                     """,
                     [
@@ -177,11 +207,12 @@ def upsert_trials_partition(rows):
                             r.nct_id, r.brief_title, r.brief_summary, r.study_type, r.primary_purpose,
                             r.overall_status, r.lead_sponsor_class, r.enrollment_count, r.start_date,
                             r.primary_completion_date, r.healthy_volunteers, r.sex,
-                            r.minimum_age_years, r.maximum_age_years, r.enrollment_duration_days,
+                            r.minimum_age_years, r.maximum_age_years, r.enrollment_duration_months,
+                            r.trial_velocity,
                         )
                         for r in rows
                     ],
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 )
     finally:
         conn.close()
@@ -203,11 +234,20 @@ def insert_sites_partition(rows):
                 psycopg2.extras.execute_values(
                     cur,
                     """
-                    INSERT INTO silver.trial_sites (nct_id, facility_name, city, state, country, transformed_at)
+                    INSERT INTO silver.trial_sites (
+                        nct_id, facility_name, city, state, zip, country,
+                        latitude, longitude, conditions, transformed_at
+                    )
                     VALUES %s
                     """,
-                    [(r.nct_id, r.facility_name, r.city, r.state, r.country) for r in rows],
-                    template="(%s, %s, %s, %s, %s, NOW())",
+                    [
+                        (
+                            r.nct_id, r.facility_name, r.city, r.state, r.zip, r.country,
+                            r.latitude, r.longitude, r.conditions,
+                        )
+                        for r in rows
+                    ],
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 )
     finally:
         conn.close()
