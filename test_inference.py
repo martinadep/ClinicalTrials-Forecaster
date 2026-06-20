@@ -4,7 +4,8 @@ import psycopg2
 import psycopg2.extras
 
 # 1. Carica le configurazioni del team
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+# Saliamo di un livello per importare correttamente 'shared' e 'models' se lo script è in un sotto-folder
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from shared.config import load_dotenv
 from shared.db import build_dsn_from_env
 from models.forecaster import predict_site_rankings
@@ -19,12 +20,13 @@ def run_inference_test():
         return
 
     conn = psycopg2.connect(dsn)
-    # Usiamo RealDictCursor così i dati estratti da Postgres diventano dizionari Python pesanti
+    # Usiamo RealDictCursor così i dati estratti da Postgres diventano dizionari Python
     cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     try:
-        # 2. SIMULA L'ESTRAZIONE GEOGRAFICA (Compito di Person M / API) [cite: 54, 56, 115]
-        # Chiediamo i siti candidati per una specifica area (es. Italy) [cite: 43, 56, 68]
+        # 2. SIMULA L'ESTRAZIONE GEOGRAFICA
+        # Estraiamo anche i campi potenzialmente Nulli (n_trials, avg_velocity, latitude, longitude)
+        # per verificare la resilienza della nuova funzione
         print("[TEST]: Estrazione dei siti candidati in Italia da gold.site_history...")
         cursor.execute("""
             SELECT facility_name, city, zip, country, latitude, longitude, n_trials, avg_velocity 
@@ -37,8 +39,8 @@ def run_inference_test():
             print("[WARN]: Nessun sito trovato in Italia. Hai inserito i mock data?")
             return
 
-        # 3. SIMULA L'INPUT DI UN NUOVO TRIAL DALLA DASHBOARD (Compito di Person C / UI) [cite: 5, 43, 119]
-        # Un utente inserisce i parametri di un nuovo studio che vuole pianificare [cite: 5, 43, 67]
+        # 3. SIMULA L'INPUT DI UN NUOVO TRIAL DALLA DASHBOARD
+        # Passiamo valori tipici di un trial clinico pianificato.
         new_trial_request = {
             "study_type": "INTERVENTIONAL",
             "primary_purpose": "TREATMENT",
@@ -53,16 +55,22 @@ def run_inference_test():
 
         print(f"[TEST]: Trovati {len(candidate_sites)} siti candidati. Avvio inferenza Spark ML...")
 
-        # 4. INVOCAZIONE DELLA TUA FUNZIONE DI PREDIZIONE [cite: 72]
-        # Calcoliamo la velocity predetta per ciascun candidato accoppiato al trial [cite: 44, 72, 79]
+        # 4. INVOCAZIONE DELLA FUNZIONE DI PREDIZIONE AGGIORNATA
+        # Il modello adesso gestisce internamente i None inserendo la mediana/media 
+        # o assegnando 0.0 di default per i siti privi di storico o coordinate.
         ranked_results = predict_site_rankings(new_trial_request, candidate_sites)
 
-        # 5. STAMPA DEI RISULTATI ORDINATI (Quello che vedrà la Dashboard) [cite: 46, 73, 99]
+        # 5. STAMPA DEI RISULTATI ORDINATI (Quello che vedrà la Dashboard)
         print("\n🏆 CLASSIFICA RECOMMENDATION (ORDINATA PER VELOCITY STIMATA):")
         print("-" * 75)
         for rank, site in enumerate(ranked_results, 1):
-            print(f"{rank}. {site['facility_name']} ({site['city']}) "
-                  f"-> Velocity Predetta: {site['predicted_velocity']} paz/mese")
+            # Gestione formattazione stringa sicura in caso di fallback su Unknown
+            facility = site.get('facility_name', 'Struttura Sconosciuta')
+            city = site.get('city', 'Città Sconosciuta')
+            velocity = site.get('predicted_velocity', 0.0)
+            
+            print(f"{rank:02d}. {facility} ({city}) "
+                  f"-> Velocity Predetta: {velocity} paz/mese")
         print("-" * 75)
 
     except Exception as e:
