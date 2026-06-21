@@ -22,7 +22,6 @@ KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC_BRONZE = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
 TOPIC_SILVER = os.getenv("KAFKA_TOPIC_SILVER", "trials.silver")
 
-# SCHEMA AGGIORNATO: rimosso healthy_volunteers, allineato a Postgres Silver
 TRIALS_SCHEMA = StructType([
     StructField("nct_id", StringType()),
     StructField("brief_title", StringType()),
@@ -32,14 +31,14 @@ TRIALS_SCHEMA = StructType([
     StructField("overall_status", StringType()),
     StructField("lead_sponsor_class", StringType()),
     StructField("enrollment_count", IntegerType()),
-    StructField("start_date", StringType()),  # Stringa YYYY-MM-DD digeribile dal tipo DATE di Postgres
+    StructField("start_date", StringType()),
     StructField("primary_completion_date", StringType()),
     StructField("sex", StringType()),
     StructField("minimum_age_years", DoubleType()),
     StructField("maximum_age_years", DoubleType()),
     StructField("enrollment_duration_months", DoubleType()),
     StructField("trial_velocity", DoubleType()),
-    StructField("phase", StringType()), # Mantenuto solo per arricchimento/Kafka (non salvato in SQL)
+    StructField("phase", StringType()), 
 ])
 
 SITES_SCHEMA = StructType([
@@ -121,7 +120,7 @@ def parse_study(json_str, kafka_ts):
         "maximum_age_years": float(parse_age_to_years(eligibility.get("maximumAge")) or 100.0),
         "enrollment_duration_months": duration_months,
         "trial_velocity": _trial_velocity(enrollment_count, duration_months),
-        "phase": (status.get("phases", ["UNKNOWN"])[0] if status.get("phases") else "UNKNOWN").upper()
+        "phase": (design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper()
     }
 
     conditions = protocol.get("conditionsModule", {}).get("conditions") or []

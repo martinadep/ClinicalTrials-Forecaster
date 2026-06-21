@@ -16,8 +16,7 @@ MAX_TRIALS = 15000
 
 def fetch_clinical_trial(page_token=None, is_daily_run=False):
     params = {
-        "pageSize": PAGE_SIZE,
-        "query.term": "INTERVENTIONAL",     
+        "pageSize": PAGE_SIZE,    
         "filter.overallStatus": "COMPLETED"  
     }
     
@@ -27,7 +26,7 @@ def fetch_clinical_trial(page_token=None, is_daily_run=False):
     if is_daily_run:
         yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
         params["filter.advanced"] = f"LAST_UPDATE_DATE >= {yesterday}"
-        print(f"[FETCH]: Modalità Incrementale attiva. Filtro: LAST_UPDATE_DATE >= {yesterday}")
+        print(f"[FETCH]: Filtering on LAST_UPDATE_DATE >= {yesterday}")
 
     for attempt in range(RETRIES):
         try:
@@ -35,9 +34,9 @@ def fetch_clinical_trial(page_token=None, is_daily_run=False):
             if response.status_code == 200:
                 data = response.json()
                 return data.get("studies", []), data.get("nextPageToken")
-            print(f"[ERR]: Status Code {response.status_code} su tentativo {attempt + 1}")
+            print(f"[ERR]: Status Code {response.status_code} on attempt {attempt + 1}")
         except requests.exceptions.RequestException as e:
-            print(f"[ERR]: Errore di rete: {e}")
+            print(f"[ERR]: Network Error: {e}")
             if attempt < RETRIES - 1:
                 time.sleep(SLEEP_RETRY)
     return None
@@ -76,7 +75,9 @@ def main():
     if dsn:
         print(f"[INFO]: Connected to Postgres Database. Starting ingestion...")
     else:
-        print("[INFO]: No database found. Writing to local JSON files.")
+        # print("[INFO]: No database found. Writing to local JSON files.")
+        print("Could not connect to Postgres Database. Aborting.")
+        return
 
     page_counter = 1
     total_processed = 0
@@ -100,7 +101,7 @@ def main():
         print(f"[INFO]: Page {page_counter} completed. Processed {len(study_list)} trials. Total progress: {total_processed}")
 
         if not is_daily_run and total_processed >= MAX_TRIALS:
-            print(f"[INFO]: Raggiunto il limite prefissato del sample significativo ({total_processed} >= {MAX_TRIALS}). Stop Ingestion.")
+            print(f"[INFO]: Reached the predefined limit of significant samples ({total_processed} >= {MAX_TRIALS}). Stop Ingestion.")
             break
 
         next_page_token = next_token
