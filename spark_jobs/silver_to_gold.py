@@ -99,7 +99,7 @@ def main():
     ).cache()
 
     trials_df = trials_df.filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150))
-    trials_df = trials_df.filter(F.col("study_type") == "INTERVENTIONAL")
+    # trials_df = trials_df.filter(F.col("study_type") == "INTERVENTIONAL")
 
     # 2. MODIFICATO: Allineati i filtri SQL push-down includendo l'esclusione di 'UNKNOWN FACILITY'
     site_conditions_count_df = read_table(
