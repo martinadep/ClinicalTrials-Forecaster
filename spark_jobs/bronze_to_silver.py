@@ -1,6 +1,7 @@
 import json
 import os
 import datetime
+import re
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
@@ -55,9 +56,11 @@ SITES_SCHEMA = StructType([
 
 _DAYS_PER_MONTH = 30.44
 
+# Global reference point for executor initializations
+_GLOBAL_RULES_BROADCAST = None
+
 
 def _duration_months(start_str, end_str):
-    """Calcola i mesi di durata. Ritorna 0.0 se i dati sono corrotti o mancanti (No Null)."""
     if not start_str or not end_str or start_str == "1970-01-01" or end_str == "1970-01-01":
         return 0.0
     try:
@@ -70,14 +73,35 @@ def _duration_months(start_str, end_str):
 
 
 def _trial_velocity(enrollment_count, duration_months):
-    """Ritorna la velocity di arruolamento. Evita Null e divisioni per zero."""
     if not enrollment_count or not duration_months or duration_months <= 0:
         return 0.0
     return round(enrollment_count / duration_months, 4)
 
 
+def _apply_regex_mapping(condition_name, rules):
+    """Normalizes variation text strings using regex rules maps."""
+    if not condition_name:
+        return "GENERAL"
+        
+    # Standardize string format: uniform spacing, strip noisy quotes/brackets
+    c_clean = str(condition_name).strip().upper()
+    c_clean = re.sub(r'[\"\']', '', c_clean)
+    c_clean = re.sub(r'\s+', ' ', c_clean)
+    
+    if not rules:
+        return c_clean.title()
+        
+    # Execute regex sequence scans
+    for rule in rules:
+        category = rule["category"]
+        if any(pattern.search(c_clean) for pattern in rule["patterns"]):
+            return category
+            
+    return c_clean.title()
+
+
 def parse_study(json_str, kafka_ts):
-    """Parsing robusto del payload JSON di Bronze con rimozione dei Null."""
+    """Parses raw bronze trial JSON records cleanly safely inside spark executors."""
     try:
         study = json.loads(json_str)
     except (TypeError, ValueError):
@@ -97,7 +121,6 @@ def parse_study(json_str, kafka_ts):
     eligibility = protocol.get("eligibilityModule", {})
     description = protocol.get("descriptionModule", {})
 
-    # Gestione Date: Fallback su epoca fissa se mancano (Postgres DATE le accetta)
     start_date = normalize_date(status.get("startDateStruct", {}).get("date")) or "1970-01-01"
     primary_completion_date = normalize_date(status.get("primaryCompletionDateStruct", {}).get("date")) or "1970-01-01"
     
@@ -123,9 +146,33 @@ def parse_study(json_str, kafka_ts):
         "phase": (design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper()
     }
 
-    conditions = protocol.get("conditionsModule", {}).get("conditions") or []
-    if not conditions:
-        conditions = ["GENERAL"]
+    # Extract conditions using rules unpacked from distributed Broadcast context
+    raw_conditions = protocol.get("conditionsModule", {}).get("conditions") or []
+    cleaned_conditions = []
+    
+    # Safely unpack reference points inside Spark executor worker threads
+    rules_to_use = _GLOBAL_RULES_BROADCAST.value if _GLOBAL_RULES_BROADCAST else []
+
+    for c in raw_conditions:
+        if not c:
+            continue
+        
+        # Guard filters against systemic structural noise or description blocks
+        c_str = str(c).strip()
+        if len(c_str) < 2 or len(c_str) > 120:
+            continue
+            
+        c_mapped = _apply_regex_mapping(c_str, rules_to_use)
+        
+        # Standard filter limits
+        if len(c_mapped) < 2 or len(c_mapped) > 75:
+            continue
+            
+        if c_mapped not in cleaned_conditions:
+            cleaned_conditions.append(c_mapped)
+
+    if not cleaned_conditions:
+        cleaned_conditions = ["GENERAL"]
 
     sites = [
         {
@@ -137,7 +184,7 @@ def parse_study(json_str, kafka_ts):
             "country": loc.get("country") or "UNKNOWN",
             "latitude": float(loc.get("geoPoint", {}).get("lat") or 0.0),
             "longitude": float(loc.get("geoPoint", {}).get("lon") or 0.0),
-            "conditions": conditions,
+            "conditions": cleaned_conditions,
         }
         for loc in protocol.get("contactsLocationsModule", {}).get("locations", [])
     ]
@@ -146,7 +193,6 @@ def parse_study(json_str, kafka_ts):
 
 
 def upsert_trials_partition(rows):
-    """Upsert su silver.trials. Rimossa la colonna healthy_volunteers e phase (per DDL)."""
     import psycopg2
     import psycopg2.extras
 
@@ -267,10 +313,33 @@ def produce_to_silver_topic(trial_dicts):
 
 
 def main():
+    global _GLOBAL_RULES_BROADCAST
     load_dotenv()
-    spark = SparkSession.builder.appName("bronze_to_silver").getOrCreate()
+    
+    compiled_rules = []
+    mapping_path = "spark_jobs/mapping_rules.json"
+    
+    if os.path.exists(mapping_path):
+        try:
+            with open(mapping_path, "r", encoding="utf-8") as f:
+                raw_rules = json.load(f)
+            for r in raw_rules:
+                compiled_rules.append({
+                    "category": r["category"],
+                    "patterns": [re.compile(p, re.IGNORECASE) for p in r["patterns"]]
+                })
+            print(f"[INFO]: Compiled {len(compiled_rules)} string mapping groups.")
+        except Exception as e:
+            print(f"[ERROR]: Error parsing mapping_rules.json: {e}")
+    else:
+        print(f"[WARNING]: Mapping file {mapping_path} missing.")
 
+    # Run Spark Session
+    spark = SparkSession.builder.appName("bronze_to_silver").getOrCreate()
     spark.sparkContext.setLogLevel("ERROR") 
+
+    # Broadicast globally to preserve reference visibility inside the tasks
+    _GLOBAL_RULES_BROADCAST = spark.sparkContext.broadcast(compiled_rules)
 
     kafka_df = (
         spark.read.format("kafka")
@@ -282,6 +351,7 @@ def main():
     )
     total_messages = kafka_df.count()
 
+    # RDD processing chain cleanly references internal module variables on the workers
     parsed_rdd = (
         kafka_df.select(col("value").cast("string").alias("json_str"), col("timestamp").alias("kafka_ts"))
         .rdd.map(lambda row: parse_study(row.json_str, row.kafka_ts))
@@ -308,10 +378,10 @@ def main():
     produce_to_silver_topic(trial_dicts)
 
     print(
-        f"[INFO]: bronze_to_silver: processed={total_messages} written={parsed_ok} "
-        f"skipped(no nct_id/unparseable)={skipped}"
+        f"[INFO]: Processing completed: total={total_messages} saved={parsed_ok} skipped={skipped}"
     )
 
+    _GLOBAL_RULES_BROADCAST.unpersist()
     spark.stop()
 
 

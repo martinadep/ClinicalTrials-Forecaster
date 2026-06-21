@@ -1,0 +1,126 @@
+[
+  {
+    "category": "Acute Myeloid Leukemia (AML)",
+    "patterns": ["ACUTE MYELOID LEUKEMIA", "ACUTE MYELOBLASTIC LEUKEMIA", "ACUTE MYELOMONOCYTIC LEUKEMIA", "PURE ERYTHROID LEUKEMIA", "\\bAML\\b", "ERYTHROLEUKEMIA"]
+  },
+  {
+    "category": "Abdominal Aortic Aneurysm",
+    "patterns": ["ABDOMINAL AORTIC ANEURYSM", "AAA", "AORTIC ANEURYSM", "AORTIC ANEURYSMS"]
+  },
+  {
+    "category": "Acute Lymphoblastic Leukemia (ALL)",
+    "patterns": ["ACUTE LYMPHOBLASTIC LEUKEMIA", "ACUTE LYMPHOCYTIC LEUKEMIA", "ACUTE LYMPHOID LEUKEMIA", "\\bALL\\b", "\\bB-ALL\\b"]
+  },
+  {
+    "category": "Anterior Cruciate Ligament",
+    "patterns": ["ANTERIOR CRUCIATE LIGAMENT", "\\bACL\\b"]
+  },
+  {
+    "category": "Acne",
+    "patterns": "ACNE"
+  },
+  {
+    "category": "Actinic Keratosis",
+    "patterns": ["ACTINIC KERATOSIS", "ACTINIC KERATOSES", "AK"]
+  },
+  {
+    "category": "Daily Activities",
+    "patterns": ["\\bACTIVITY", "ACTIVITIES"]
+  },
+  {
+    "category": "Chronic Leukemias (CML/CLL)",
+    "patterns": ["CHRONIC MYELOGENOUS LEUKEMIA", "CHRONIC MYELOID LEUKEMIA", "CHRONIC MYELOMONOCYTIC LEUKEMIA", "CHRONIC NEUTROPHILIC LEUKEMIA", "CHRONIC EOSINOPHILIC LEUKEMIA", "\\bCML\\b", "CHRONIC LYMPHOCYTIC LEUKEMIA", "\\bCLL\\b", "SMALL LYMPHOCYTIC LEUKEMIA"]
+  },
+  {
+    "category": "Lymphoma",
+    "patterns": ["LYMPHOMA", "\\bDLBCL\\b", "\\bNHL\\b", "HODGKIN", "MYCOSIS FUNGOIDES", "SEZARY SYNDROME", "RICHTER SYNDROME"]
+  },
+  {
+    "category": "Breast Cancer",
+    "patterns": ["BREAST CANCER", "BREAST CARCINOMA", "BREAST NEOPLASM", "BREASTCANCER"]
+  },
+  {
+    "category": "Lung Cancer",
+    "patterns": ["LUNG CANCER", "LUNG CARCINOMA", "LUNG NEOPLASM", "BRONCHOGENIC CARCINOMA", "PLEOMORPHIC CARCINOMA", "\\bNSCLC\\b", "\\bSCLC\\b"]
+  },
+  {
+    "category": "Prostate Cancer",
+    "patterns": ["PROSTATE CANCER", "PROSTATIC ADENOCARCINOMA", "PROSTATIC NEOPLASM", "PROSTATE CARCINOMA", "CASTRATION-RESISTANT PROSTATIC CANCER"]
+  },
+  {
+    "category": "Ovarian & Fallopian Cancer",
+    "patterns": ["OVARIAN CANCER", "OVARIAN CARCINOMA", "OVARIAN NEOPLASM", "OVARIAN EPITHELIAL", "OVARIAN GERM CELL", "OVARIAN MUCINOUS", "OVARIAN SEROUS", "FALLOPIAN TUBE CANCER", "FALLOPIAN TUBE CARCINOMA", "FALLOPIAN TUBE ADENOCARCINOMA"]
+  },
+  {
+    "category": "Colorectal & Gastric Cancer",
+    "patterns": ["COLORECTAL", "COLO-RECTAL", "COLON CANCER", "COLON NEOPLASM", "COLON CARCINOMA", "GASTRIC CANCER", "GASTRIC ADENOCARCINOMA", "RECTAL CANCER", "RECTUM CANCER", "RECTAL ADENOCARCINOMA", "RECTAL NEOPLASM", "ANAL CANCER"]
+  },
+  {
+    "category": "Pancreatic & Liver Cancer",
+    "patterns": ["PANCREATIC CANCER", "PANCREATIC ADENOCARCINOMA", "HEPATOCELLULAR CARCINOMA", "HEPATOCELLULAR CANCER", "LIVER CANCER", "LIVER NEOPLASM", "CHOLANGIOCARCINOMA", "BILE DUCT CARCINOMA", "\\bHCC\\b"]
+  },
+  {
+    "category": "COVID-19 & SARS",
+    "patterns": ["COVID", "SARS-COV", "CORONAVIRUS", "CORONA VIRUS"]
+  },
+  {
+    "category": "Adolescent",
+    "patterns": "ADOLESCENT"
+  },
+  {
+    "category": "Diabetes",
+    "patterns": ["DIABETES", "DIABETIC", "DIABETE", "ARTIFICIAL PANCREAS", "INSULIN RESISTANCE", "GLYCEMIC CONTROL"]
+  },
+  {
+    "category": "Asthma & COPD",
+    "patterns": ["ASTHMA", "\\bCOPD\\b", "CHRONIC OBSTRUCTIVE PULMONARY", "BRONCHITIS", "BRONCHIECTASIS", "EMPHYSEMA"]
+  },
+  {
+    "category": "Hypertension & Cardiovascular",
+    "patterns": ["HYPERTENSION", "BLOOD PRESSURE", "ACUTE CORONARY SYNDROME", "ACUTE CORONARY SYNDROMES", "CORONARY ARTERY DISEASE", "CORONARY HEART DISEASE", "\\bCAD\\b", "MYOCARDIAL INFARCTION", "MYOCARDIAL ISCHEMIA", "HEART FAILURE", "ARRHYTHMIA", "ARRYTHMIA", "ATRIAL FIBRILLATION", "ATRIAL TACHYCARDIA", "\\bSTEMI\\b", "\\bNSTEMI\\b", "ANGINA", "AORTIC STENOSIS", "CARDIAC ARREST", "CARDIOMYOPATHY", "TAKOTSUBO"]
+  },
+  {
+    "category": "Stroke & Cerebrovascular",
+    "patterns": ["STROKE", "ISCHEMIC STROKE", "CEREBROVASCULAR", "BRAIN ISCHEMIA", "INTRACEREBRAL HAEMORRHAGE", "SUBARACHNOID HEMORRHAGE", "TRANSIENT ISCHEMIC ATTACK", "\\bTIA\\b"]
+  },
+  {
+    "category": "Chronic Kidney Disease (CKD)",
+    "patterns": ["KIDNEY DISEASE", "KIDNEY FAILURE", "\\bCKD\\b", "RENAL FAILURE", "RENAL INSUFFICIENCY", "RENAL IMPAIRMENT", "\\bESRD\\b", "END-STAGE RENAL", "ACUTE KIDNEY INJURY", "\\bAKI\\b", "NEPHROPATHY", "LUPUS NEPHRITIS", "IGA NEPHROPATHY"]
+  },
+  {
+    "category": "Alzheimer & Dementia",
+    "patterns": ["ALZHEIMER", "DEMENTIA", "COGNITIVE DECLINE"]
+  },
+  {
+    "category": "Depression & Anxiety",
+    "patterns": ["DEPRESSION", "DEPRESSIVE", "ANXIETY", "PANIC DISORDER", "DYSTHYMIA", "AGORAPHOBIA", "SAD", "SEASONAL AFFECTIVE DISORDER"]
+  },
+  {
+    "category": "ADHD & Autism",
+    "patterns": ["\\bADHD\\b", "ATTENTION DEFICIT", "ATTENTION-DEFICIT", "\\bASD\\b", "AUTISM", "DEVELOPMENTAL DISORDER"]
+  },
+  {
+    "category": "HIV / AIDS",
+    "patterns": ["\\bHIV\\b", "\\bAIDS\\b", "IMMUNODEFICIENCY"]
+  },
+  {
+    "category": "Osteoarthritis & Joint Issues",
+    "patterns": ["OSTEOARTHRITIS", "OSTEO ARTHRITIS", "ARTHRITIS", "JOINT DISEASE", "KNEE OA", "ANKYLOSING SPONDYLITIS", "CAPSULITIS", "FROZEN SHOULDER"]
+  },
+  {
+    "category": "Anesthesia & Perioperative Pain",
+    "patterns": ["ANESTHESIA", "ANESTHETIC", "POSTOPERATIVE PAIN", "POST-OPERATIVE PAIN", "PAIN, POSTOPERATIVE", "ANALGESIA", "SEDATION", "INTUBATION", "EXTUBATION", "NERVE BLOCK", "EMERGENCE DELIRIUM", "PONV"]
+  },
+  {
+    "category": "Dental & Oral Health",
+    "patterns": ["DENTAL", "GINGIVAL", "GINGIVITIS", "PERIODONTAL", "PERIODONTITIS", "TOOTH", "TEETH", "DENTIN", "CARIES", "EDENTULISM", "EDENTULOUS", "MOLAR", "BRUXISM", "ROOT CANAL"]
+  },
+  {
+    "category": "Pregnancy & Labor",
+    "patterns": ["PREGNANCY", "PREGNANT", "LABOR LONG", "DURATION OF LABOR", "INDUCTION OF LABOR", "PRE-ECLAMPSIA", "PREECLAMPSIA", "CESAREAN", "CAESAREAN", "ABORTION", "POSTPARTUM", "MATERNAL", "EPISIOTOMY", "PLACENTA", "VAGINAL DELIVERY"]
+  },
+  {
+    "category": "Obesity & Overweight",
+    "patterns": ["OBESITY", "OVERWEIGHT", "ABDOMINAL OBESITY", "BARIATRIC", "WEIGHT MANAGEMENT"]
+  }
+]
