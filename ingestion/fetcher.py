@@ -2,6 +2,7 @@ import json
 import time
 import os
 import requests
+import datetime
 
 from shared.config import load_dotenv
 from shared.db import build_dsn_from_env, insert_study_into_db
@@ -10,13 +11,22 @@ from shared.kafka import build_kafka_producer, produce_study_to_kafka
 API_BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 RETRIES = 5
 SLEEP_RETRY = 2
-SAMPLE_SIZE = 100 # each page is 10 studies
+PAGE_SIZE = 1000
+MAX_TRIALS = 15000
 
-
-def fetch_clinical_trial(page_token=None):
-    params = {}
+def fetch_clinical_trial(page_token=None, is_daily_run=False):
+    params = {
+        "pageSize": PAGE_SIZE,    
+        "filter.overallStatus": "COMPLETED"  
+    }
+    
     if page_token:
         params["pageToken"] = page_token
+
+    if is_daily_run:
+        yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        params["filter.advanced"] = f"LAST_UPDATE_DATE >= {yesterday}"
+        print(f"[FETCH]: Filtering on LAST_UPDATE_DATE >= {yesterday}")
 
     for attempt in range(RETRIES):
         try:
@@ -24,9 +34,9 @@ def fetch_clinical_trial(page_token=None):
             if response.status_code == 200:
                 data = response.json()
                 return data.get("studies", []), data.get("nextPageToken")
-            print(f"[ERR]: {response.status_code}")
+            print(f"[ERR]: Status Code {response.status_code} on attempt {attempt + 1}")
         except requests.exceptions.RequestException as e:
-            print(f"[ERR]: An error occurred {e}")
+            print(f"[ERR]: Network Error: {e}")
             if attempt < RETRIES - 1:
                 time.sleep(SLEEP_RETRY)
     return None
@@ -36,7 +46,6 @@ def _write_study_to_file(study, fallback_id):
     sid = study.get("protocolSection", {}).get("identificationModule", {}).get("nctId") or fallback_id
     with open(f"sample_study_{sid}.json", "w", encoding="utf-8") as f:
         f.write(json.dumps(study, indent=2))
-    print(f"[INFO]: Wrote study {sid} to sample_study_{sid}.json")
 
 
 def process_page(study_list, dsn, producer=None):
@@ -44,9 +53,7 @@ def process_page(study_list, dsn, producer=None):
     for idx, study in enumerate(study_list):
         try:
             if dsn:
-                # 1. Write batch data directly into DB
                 insert_study_into_db(study, dsn=dsn)
-                # 2. Mirror/buffer to Kafka queue
                 produce_study_to_kafka(producer, study)
             else:
                 _write_study_to_file(study, idx)
@@ -59,36 +66,56 @@ def process_page(study_list, dsn, producer=None):
 def main():
     load_dotenv()
 
+    is_daily_run = os.getenv("RUN_MODE", "FULL").upper() == "DAILY"
+
     next_page_token = None
     dsn = os.getenv("DATABASE_URL") or build_dsn_from_env()
     producer = build_kafka_producer()
 
     if dsn:
-        print(
-            f"[INFO]: Using database connection from environment for {os.getenv('POSTGRES_DB', 'clinical_trials')} "
-            f"at {os.getenv('POSTGRES_HOST') or os.getenv('DB_HOST') or 'localhost'}:{os.getenv('POSTGRES_PORT', '5432')}"
-        )
+        print(f"[INFO]: Connected to Postgres Database. Starting ingestion...")
     else:
-        print("[INFO]: No database DSN found; inserts will be skipped and studies will be written to JSON files instead.")
+        # print("[INFO]: No database found. Writing to local JSON files.")
+        print("Could not connect to Postgres Database. Aborting.")
+        return
 
-    for i in range(SAMPLE_SIZE):
-        print(f"[INFO]: Fetching page {i + 1} / {SAMPLE_SIZE} of clinical trials data...")
-        result = fetch_clinical_trial(next_page_token)
-        if not result:
-            print("[ERR]: Error fetching clinical trials data.")
+    page_counter = 1
+    total_processed = 0
+
+    while True:
+        print(f"[INFO]: Starting Fetch Page {page_counter} (Token: {next_page_token or 'Initial'})...")
+        
+        result = fetch_clinical_trial(next_page_token, is_daily_run=is_daily_run)
+        if result is None:
+            print("[ERR]: Error fetching data from ClinicalTrials.gov API. Aborting.")
             break
 
         study_list, next_token = result
+        
+        if not study_list:
+            print("[INFO]: No more trials to fetch.")
+            break
+
         inserted = process_page(study_list, dsn, producer=producer)
-        print(f"[INFO]: Processed {len(study_list)} studies, attempted inserts: {inserted}")
+        total_processed += inserted
+        print(f"[INFO]: Page {page_counter} completed. Processed {len(study_list)} trials. Total progress: {total_processed}")
+
+        if not is_daily_run and total_processed >= MAX_TRIALS:
+            print(f"[INFO]: Reached the predefined limit of significant samples ({total_processed} >= {MAX_TRIALS}). Stop Ingestion.")
+            break
 
         next_page_token = next_token
+        page_counter += 1
+
         if not next_page_token:
+            print("[INFO]: Reached last page.")
             break
+
+        time.sleep(0.5)
 
     if producer is not None:
         producer.flush()
-        print("[INFO]: Flushed all Kafka messages.")
+        print(f"[INFO]: Pipeline completed successfully, trials processed: {total_processed}")
 
 
 if __name__ == "__main__":

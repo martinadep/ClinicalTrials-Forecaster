@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS gold.trial_features (
     primary_purpose           TEXT,
     lead_sponsor_class        TEXT,
     sex                       TEXT,
-    healthy_volunteers        BOOLEAN,
     phase                     TEXT,
     enrollment_count          INTEGER,
     n_sites                   INTEGER, 

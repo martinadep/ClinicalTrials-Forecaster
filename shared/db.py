@@ -60,7 +60,7 @@ def _upsert_raw_trial(cur, fields, raw_payload):
         (nct_id, payload_hash, raw_payload),
     )
     raw_id = cur.fetchone()[0]
-    print(f"[INFO]: Inserted raw trial with id {raw_id} for nct_id {nct_id}")
+    # print(f"[INFO]: Inserted raw trial with id {raw_id} for nct_id {nct_id}")
     return raw_id
 
 
