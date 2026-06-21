@@ -83,11 +83,17 @@ def _apply_regex_mapping(condition_name, rules):
     if not condition_name:
         return "GENERAL"
         
-    # Standardize string format: uniform spacing, strip noisy quotes/brackets
+    # 1. Convert to string, force Uppercase, strip whitespace
     c_clean = str(condition_name).strip().upper()
-    c_clean = re.sub(r'[\"\']', '', c_clean)
-    c_clean = re.sub(r'\s+', ' ', c_clean)
     
+    # 2. Strip quotes, brackets, and literal database formatting characters
+    c_clean = re.sub(r'[\"\'\[\]\(\)]', '', c_clean)
+    
+    # 3. Replace hyphens, underscores, commas, and punctuation with a single space
+    c_clean = re.sub(r'[\-_\,\.\;\:]', ' ', c_clean)
+    
+    # 4. Collapse multiple spaces into a single uniform whitespace
+    c_clean = re.sub(r'\s+', ' ', c_clean).strip()
     if not rules:
         return c_clean.title()
         
