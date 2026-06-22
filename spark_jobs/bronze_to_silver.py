@@ -149,7 +149,9 @@ def parse_study(json_str, kafka_ts):
         "maximum_age_years": float(parse_age_to_years(eligibility.get("maximumAge")) or 100.0),
         "enrollment_duration_months": duration_months,
         "trial_velocity": _trial_velocity(enrollment_count, duration_months),
-        "phase": (design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper()
+        "phase": (
+            lambda p: "UNKNOWN" if p in ["NA", "UNKNOWN"] else p
+        )((design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper())
     }
 
     # Extract conditions using rules unpacked from distributed Broadcast context
