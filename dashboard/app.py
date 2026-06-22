@@ -1,6 +1,8 @@
+import os
 import streamlit as st
 import pandas as pd
-import random                           #tb removed
+
+st.set_page_config(layout="wide")
 
 st.title("Clinical Trial Site Recommender")
 
@@ -10,50 +12,56 @@ st.write(
     "as **recruitment velocity** (patients enrolled per month)."
 )
 
-# Provisional list of conditions (placeholder).
-# Will later be replaced by the real MeSH terms extracted from the dataset.
-CONDITIONS = [
-    "Diabetes", "Hypertension", "Breast cancer", "Lung cancer", "Asthma",
-    "Depression", "Alzheimer disease", "Obesity", "Stroke",
-    "Rheumatoid arthritis", "Parkinson disease", "Heart failure",
-    "Chronic kidney disease", "COVID-19", "Multiple sclerosis",
-]
+# ---------- CARICAMENTO DATI REALI ----------
+DATA_DIR = "dashboard/data"
 
-# Provisional sites with real coordinates (placeholder).
-# Each site has: facility name, city, country, lat, lon.
-# Will later be replaced by real sites + geoPoints from the gold data.
-FAKE_SITES = [
-    {"facility": "Ospedale San Raffaele", "city": "Milan", "country": "Italy", "lat": 45.5057, "lon": 9.2647},
-    {"facility": "Policlinico Gemelli", "city": "Rome", "country": "Italy", "lat": 41.9311, "lon": 12.4255},
-    {"facility": "Charité", "city": "Berlin", "country": "Germany", "lat": 52.5263, "lon": 13.3766},
-    {"facility": "Klinikum", "city": "Munich", "country": "Germany", "lat": 48.1100, "lon": 11.4700},
-    {"facility": "Hôpital Pitié-Salpêtrière", "city": "Paris", "country": "France", "lat": 48.8389, "lon": 2.3640},
-    {"facility": "Hospital Clínic", "city": "Barcelona", "country": "Spain", "lat": 41.3890, "lon": 2.1500},
-    {"facility": "Massachusetts General", "city": "Boston", "country": "United States", "lat": 42.3626, "lon": -71.0688},
-]
+@st.cache_data
+def load_metadata():
+    """Carica i metadati estratti per popolare i selettori della sidebar."""
+    conditions = pd.read_csv(os.path.join(DATA_DIR, "conditions.csv"))["condition"].tolist()
+    study_types = pd.read_csv(os.path.join(DATA_DIR, "study_types.csv"))["study_type"].tolist()
+    phases = pd.read_csv(os.path.join(DATA_DIR, "phases.csv"))["phase"].tolist()
+    return conditions, study_types, phases
 
-# Helper lists for the selection menus, built from the data above.
-ALL_CITIES = sorted({s["city"] for s in FAKE_SITES})
-ALL_COUNTRIES = sorted({s["country"] for s in FAKE_SITES})
+try:
+    CONDITIONS, STUDY_TYPES, PHASES = load_metadata()
+except Exception as e:
+    st.error(f"Errore nel caricamento dei metadati da {DATA_DIR}. Assicurati di aver eseguito retrieve_data.py.")
+    st.stop()
 
 
-# Placeholder prediction function.
-# Will later be replaced by a real call to the trained model / inference API.
-def predict_sites(condition, study_type, phase, enrollment, selected_sites):
-    results = []
-    for site in selected_sites:
-        results.append({
-            "Site": site["facility"],
-            "City": site["city"],
-            "Country": site["country"],
-            "Predicted velocity (patients/month)": round(random.uniform(5, 30), 1),
-            "lat": site["lat"],
-            "lon": site["lon"],
-        })
+# ---------- FUNZIONE DI PREDIZIONE / FILTRO REALE ----------
+def predict_sites(selected_condition):
+    """
+    Legge il file reale cond_count.csv (o la tabella dei siti se hai le geolocalizzazioni associate)
+    Mockiamo la velocity usando il count reale normalizzato o un calcolo sui dati estratti.
+    """
+    cond_count_path = os.path.join(DATA_DIR, "cond_count.csv")
+    if not os.path.exists(cond_count_path):
+        return []
+    
+    df_counts = pd.read_csv(cond_count_path)
+    
+    # Recuperiamo il valore reale di count per la condizione selezionata
+    condition_data = df_counts[df_counts['condition'] == selected_condition]
+    
+    if condition_data.empty:
+        return []
+    
+    real_count = int(condition_data.iloc[0]['count'])
+    
+    # Simulazione di siti associati (In produzione qui leggerai la tabella gold/silver dei siti geolocalizzati)
+    # Per ora creiamo una lista basata sul peso del count reale della patologia
+    results = [
+        {"Site": "Ospedale San Raffaele", "City": "Milan", "Country": "Italy", "Velocity": round(real_count * 0.05, 1), "lat": 45.5057, "lon": 9.2647},
+        {"Site": "Policlinico Gemelli", "City": "Rome", "Country": "Italy", "Velocity": round(real_count * 0.04, 1), "lat": 41.9311, "lon": 12.4255},
+        {"Site": "Charité", "City": "Berlin", "Country": "Germany", "Velocity": round(real_count * 0.06, 1), "lat": 52.5263, "lon": 13.3766},
+        {"Site": "Massachusetts General", "City": "Boston", "Country": "United States", "Velocity": round(real_count * 0.08, 1), "lat": 42.3626, "lon": -71.0688},
+    ]
     return results
 
 
-# ---------- SIDEBAR: user inputs ----------
+# ---------- SIDEBAR: input dell'utente ----------
 st.sidebar.header("Trial details")
 
 condition = st.sidebar.selectbox(
@@ -61,11 +69,9 @@ condition = st.sidebar.selectbox(
     index=None, placeholder="Type to search a condition...",
 )
 
-study_type = st.sidebar.selectbox("Study type", ["Interventional", "Observational"])
+study_type = st.sidebar.selectbox("Study type", STUDY_TYPES)
 
-phase = st.sidebar.selectbox(
-    "Phase", ["Phase 1", "Phase 2", "Phase 3", "Phase 4", "Not applicable"],
-)
+phase = st.sidebar.selectbox("Phase", PHASES)
 
 enrollment = st.sidebar.number_input(
     "Target enrollment (number of patients)", min_value=1, value=100,
@@ -73,49 +79,65 @@ enrollment = st.sidebar.number_input(
 
 st.sidebar.divider()
 
-# Choose how to select candidates: by city (primary) or by country (extra). 
+# Liste di città e nazioni statiche o ricavabili dai tuoi futuri file dei siti
+ALL_CITIES = ["Berlin", "Boston", "Milan", "Rome"]
+ALL_COUNTRIES = ["Germany", "Italy", "United States"]
+
 selection_mode = st.sidebar.radio(
     "Select candidates by",
     ["City", "Country"],
 )
 
+chosen = []
 if selection_mode == "City":
     chosen = st.sidebar.multiselect("Candidate cities", ALL_CITIES)
-    selected_sites = [s for s in FAKE_SITES if s["city"] in chosen]
 else:
     chosen = st.sidebar.multiselect("Candidate countries", ALL_COUNTRIES)
-    selected_sites = [s for s in FAKE_SITES if s["country"] in chosen]
 
 run = st.sidebar.button("Recommend sites")
 
-# ---------- MAIN AREA: results ----------
+
+# ---------- MAIN AREA: risultati ----------
 if run:
-    if condition is None or len(selected_sites) == 0:
-        st.warning("Please select a condition and at least one candidate in the sidebar.")
+    if condition is None or len(chosen) == 0:
+        st.warning("Please select a condition and at least one candidate geographical filter in the sidebar.")
     else:
-        predictions = predict_sites(condition, study_type, phase, enrollment, selected_sites)
-        ranking = pd.DataFrame(predictions)
-        ranking = ranking.sort_values(
-            "Predicted velocity (patients/month)", ascending=False
-        ).reset_index(drop=True)
+        # Calcola i dati basandosi sulla condition reale selezionata
+        predictions = predict_sites(condition)
+        
+        if not predictions:
+            st.error("No data available for the selected condition.")
+        else:
+            ranking = pd.DataFrame(predictions)
+            
+            # Filtra in base alla selezione geografica dell'utente
+            if selection_mode == "City":
+                ranking = ranking[ranking["City"].isin(chosen)]
+            else:
+                ranking = ranking[ranking["Country"].isin(chosen)]
+                
+            if ranking.empty:
+                st.warning("No sites found matching your combined filters.")
+            else:
+                ranking = ranking.sort_values("Velocity", ascending=False).reset_index(drop=True)
 
-        st.header("Recommended sites")
-        st.write(f"Ranked by predicted recruitment velocity for **{condition}**:")
+                st.header("Recommended sites")
+                st.write(f"Ranked by recruitment velocity metrics for **{condition}**:")
 
-        # Highlight the top recommendation (row 0, the best one)
-        best = ranking.iloc[0]
-        st.success(
-            f"**Top recommendation: {best['Site']}** "
-            f"({best['City']}, {best['Country']}) — "
-            f"{best['Predicted velocity (patients/month)']} patients/month"
-        )
+                # Highlight del top recommendation
+                best = ranking.iloc[0]
+                st.success(
+                    f"**Top recommendation: {best['Site']}** "
+                    f"({best['City']}, {best['Country']}) — "
+                    f"{best['Velocity']} estimated patients/month"
+                )
 
-        st.dataframe(
-            ranking[["Site", "City", "Country", "Predicted velocity (patients/month)"]],
-            use_container_width=True,
-        )
+                st.dataframe(
+                    ranking[["Site", "City", "Country", "Velocity"]],
+                    use_container_width=True,
+                )
 
-        st.subheader("Site locations")
-        st.map(ranking[["lat", "lon"]])
+                st.subheader("Site locations")
+                st.map(ranking[["lat", "lon"]])
 else:
     st.info("← Fill in the trial details in the sidebar and click **Recommend sites**.")
