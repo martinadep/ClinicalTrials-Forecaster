@@ -8,3 +8,4 @@ __pycache__/
 sample_study_*
 
 saved_models/
+models/artifacts/
