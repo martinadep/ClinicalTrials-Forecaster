@@ -40,6 +40,7 @@ TRIALS_SCHEMA = StructType([
     StructField("enrollment_duration_months", DoubleType()),
     StructField("trial_velocity", DoubleType()),
     StructField("phase", StringType()), 
+    StructField("mesh_conditions_ids", ArrayType(StringType()))
 ])
 
 SITES_SCHEMA = StructType([
@@ -51,7 +52,7 @@ SITES_SCHEMA = StructType([
     StructField("country", StringType()),
     StructField("latitude", DoubleType()),
     StructField("longitude", DoubleType()),
-    StructField("conditions", ArrayType(StringType())),
+    StructField("mesh_conditions_ids", ArrayType(StringType())), 
 ])
 
 _DAYS_PER_MONTH = 30.44
@@ -78,32 +79,32 @@ def _trial_velocity(enrollment_count, duration_months):
     return round(enrollment_count / duration_months, 4)
 
 
-def _apply_regex_mapping(condition_name, rules):
-    """Normalizes variation text strings using regex rules maps."""
-    if not condition_name:
-        return "GENERAL"
+# def _apply_regex_mapping(condition_name, rules):
+#     """Normalizes variation text strings using regex rules maps."""
+#     if not condition_name:
+#         return "GENERAL"
         
-    # 1. Convert to string, force Uppercase, strip whitespace
-    c_clean = str(condition_name).strip().upper()
+#     # 1. Convert to string, force Uppercase, strip whitespace
+#     c_clean = str(condition_name).strip().upper()
     
-    # 2. Strip quotes, brackets, and literal database formatting characters
-    c_clean = re.sub(r'[\"\'\[\]\(\)]', '', c_clean)
+#     # 2. Strip quotes, brackets, and literal database formatting characters
+#     c_clean = re.sub(r'[\"\'\[\]\(\)]', '', c_clean)
     
-    # 3. Replace hyphens, underscores, commas, and punctuation with a single space
-    c_clean = re.sub(r'[\-_\,\.\;\:]', ' ', c_clean)
+#     # 3. Replace hyphens, underscores, commas, and punctuation with a single space
+#     c_clean = re.sub(r'[\-_\,\.\;\:]', ' ', c_clean)
     
-    # 4. Collapse multiple spaces into a single uniform whitespace
-    c_clean = re.sub(r'\s+', ' ', c_clean).strip()
-    if not rules:
-        return c_clean.title()
+#     # 4. Collapse multiple spaces into a single uniform whitespace
+#     c_clean = re.sub(r'\s+', ' ', c_clean).strip()
+#     if not rules:
+#         return c_clean.title()
         
-    # Execute regex sequence scans
-    for rule in rules:
-        category = rule["category"]
-        if any(pattern.search(c_clean) for pattern in rule["patterns"]):
-            return category
+#     # Execute regex sequence scans
+#     for rule in rules:
+#         category = rule["category"]
+#         if any(pattern.search(c_clean) for pattern in rule["patterns"]):
+#             return category
             
-    return c_clean.title()
+#     return c_clean.title()
 
 
 def parse_study(json_str, kafka_ts):
@@ -133,6 +134,24 @@ def parse_study(json_str, kafka_ts):
     enrollment_count = int(enrollment.get("count") or 0)
     duration_months = _duration_months(start_date, primary_completion_date)
 
+    derived = study.get("derivedSection", {})
+    cond_browse = derived.get("conditionBrowseModule", {})
+    
+    mesh_terms = cond_browse.get("meshes") 
+    
+    if isinstance(mesh_terms, str):
+        try:
+            mesh_terms = json.loads(mesh_terms)
+        except:
+            mesh_terms = None
+            
+    mesh_ids = []
+    if isinstance(mesh_terms, list):
+        mesh_ids = [
+            term["id"] 
+            for term in mesh_terms 
+            if isinstance(term, dict) and "id" in term and term["id"]
+        ]
     trial = {
         "nct_id": nct_id,
         "brief_title": identification.get("briefTitle") or "UNKNOWN TITLE",
@@ -151,36 +170,37 @@ def parse_study(json_str, kafka_ts):
         "trial_velocity": _trial_velocity(enrollment_count, duration_months),
         "phase": (
             lambda p: "UNKNOWN" if p in ["NA", "UNKNOWN"] else p
-        )((design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper())
+        )((design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper()),
+        "mesh_conditions_ids": mesh_ids
     }
 
     # Extract conditions using rules unpacked from distributed Broadcast context
-    raw_conditions = protocol.get("conditionsModule", {}).get("conditions") or []
-    cleaned_conditions = []
+    # raw_conditions = protocol.get("conditionsModule", {}).get("conditions") or []
+    # cleaned_conditions = []
     
     # Safely unpack reference points inside Spark executor worker threads
-    rules_to_use = _GLOBAL_RULES_BROADCAST.value if _GLOBAL_RULES_BROADCAST else []
+    # rules_to_use = _GLOBAL_RULES_BROADCAST.value if _GLOBAL_RULES_BROADCAST else []
 
-    for c in raw_conditions:
-        if not c:
-            continue
+    # for c in raw_conditions:
+    #     if not c:
+    #         continue
         
-        # Guard filters against systemic structural noise or description blocks
-        c_str = str(c).strip()
-        if len(c_str) < 2 or len(c_str) > 120:
-            continue
+    #     # Guard filters against systemic structural noise or description blocks
+    #     c_str = str(c).strip()
+    #     if len(c_str) < 2 or len(c_str) > 120:
+    #         continue
             
-        c_mapped = _apply_regex_mapping(c_str, rules_to_use)
+    #     c_mapped = _apply_regex_mapping(c_str, rules_to_use)
         
-        # Standard filter limits
-        if len(c_mapped) < 2 or len(c_mapped) > 75:
-            continue
+    #     # Standard filter limits
+    #     if len(c_mapped) < 2 or len(c_mapped) > 75:
+    #         continue
             
-        if c_mapped not in cleaned_conditions:
-            cleaned_conditions.append(c_mapped)
+    #     if c_mapped not in cleaned_conditions:
+    #         cleaned_conditions.append(c_mapped)
 
-    if not cleaned_conditions:
-        cleaned_conditions = ["GENERAL"]
+    # if not cleaned_conditions:
+    #     cleaned_conditions = ["GENERAL"]
 
     sites = [
         {
@@ -192,7 +212,7 @@ def parse_study(json_str, kafka_ts):
             "country": loc.get("country") or "UNKNOWN",
             "latitude": float(loc.get("geoPoint", {}).get("lat") or 0.0),
             "longitude": float(loc.get("geoPoint", {}).get("lon") or 0.0),
-            "conditions": cleaned_conditions,
+            "mesh_conditions_ids": mesh_ids
         }
         for loc in protocol.get("contactsLocationsModule", {}).get("locations", [])
     ]
@@ -219,7 +239,7 @@ def upsert_trials_partition(rows):
                         nct_id, brief_title, brief_summary, study_type, primary_purpose,
                         overall_status, lead_sponsor_class, enrollment_count, start_date,
                         primary_completion_date, sex, minimum_age_years, maximum_age_years, 
-                        enrollment_duration_months, trial_velocity, phase, transformed_at
+                        enrollment_duration_months, trial_velocity, phase, mesh_conditions_ids, transformed_at
                     ) VALUES %s
                     ON CONFLICT (nct_id) DO UPDATE SET
                         brief_title = EXCLUDED.brief_title,
@@ -237,6 +257,7 @@ def upsert_trials_partition(rows):
                         enrollment_duration_months = EXCLUDED.enrollment_duration_months,
                         trial_velocity = EXCLUDED.trial_velocity,
                         phase = EXCLUDED.phase,
+                        mesh_conditions_ids = EXCLUDED.mesh_conditions_ids,
                         transformed_at = EXCLUDED.transformed_at
                     """,
                     [
@@ -244,11 +265,11 @@ def upsert_trials_partition(rows):
                             r.nct_id, r.brief_title, r.brief_summary, r.study_type, r.primary_purpose,
                             r.overall_status, r.lead_sponsor_class, r.enrollment_count, r.start_date,
                             r.primary_completion_date, r.sex, r.minimum_age_years, r.maximum_age_years, 
-                            r.enrollment_duration_months, r.trial_velocity, r.phase,
+                            r.enrollment_duration_months, r.trial_velocity, r.phase, r.mesh_conditions_ids
                         )
                         for r in rows
                     ],
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 )
     finally:
         conn.close()
@@ -271,14 +292,14 @@ def insert_sites_partition(rows):
                     """
                     INSERT INTO silver.trial_sites (
                         nct_id, facility_name, city, state, zip, country,
-                        latitude, longitude, conditions, transformed_at
+                        latitude, longitude, mesh_conditions_ids, transformed_at
                     )
                     VALUES %s
                     """,
                     [
                         (
                             r.nct_id, r.facility_name, r.city, r.state, r.zip, r.country,
-                            r.latitude, r.longitude, r.conditions,
+                            r.latitude, r.longitude, r.mesh_conditions_ids,
                         )
                         for r in rows
                     ],
