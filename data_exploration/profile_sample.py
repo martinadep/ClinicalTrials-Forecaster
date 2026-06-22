@@ -1,30 +1,28 @@
 """
 =====================================================================
  profile_sample.py
- Script di profilazione del campione di ClinicalTrials.gov API v2
- Progetto: Clinical Trial Site Selection & Recruitment Forecasting
+ClinicalTrials.gov API v2 Sample Profiling Script
+Project: Clinical Site Selection and Recruitment Forecasting
 =====================================================================
+"""
 
-COSA FA QUESTO SCRIPT
+"""
+WHAT THIS SCRIPT DOES
 ---------------------
-1. Scarica un campione di trial dall'API v2 di ClinicalTrials.gov
-   (default: 5000 trial, configurabile).
-2. Per ciascun trial, estrae i campi descritti nel Data Dictionary.
-3. Calcola statistiche di:
-     - % di valori mancanti (missing rate)
-     - distribuzione dei valori delle variabili categoriche (enum)
-     - presenza/assenza di liste annidate (locations, conditions, ecc.)
-     - coverage dei termini MeSH
-     - distribuzione di outlier per enrollmentInfo.count
-4. Produce due file di output:
-     - sample_profile_report.txt   (report leggibile da incollare nel Word)
-     - sample_profile_data.csv     (dati grezzi per analisi successive)
+1. Get a sample of trials from the ClinicalTrials.gov v2 API
+   (default: 5,000 trials, configurable).
+2. For each trial, extracts the fields described in the Data Dictionary.
+3. Calculates statistics for:
+     - % of missing values (missing rate)
+     - distribution of values for categorical variables (enums)
+     - presence/absence of nested lists (locations, conditions, etc.)
+     - coverage of MeSH terms
+     - distribution of outliers for `enrollmentInfo.count`
+4. Generates two output files:
+     - sample_profile_report.txt  
+     - sample_profile_data.csv   
+"""
 
-
-# =====================================================================
-# IMPORT - Librerie standard, nessuna installazione speciale serve
-# tranne 'requests' (vedi sotto)
-# =====================================================================
 
 import sys
 import time
@@ -34,32 +32,25 @@ import os
 from datetime import datetime
 from collections import Counter, defaultdict
 
-# requests è l'unica libreria esterna che ci serve
 try:
     import requests
 except ImportError:
-    print("\n[ERRORE] Manca la libreria 'requests'.")
-    print("Per installarla, apri il terminale (in VS Code: menu Terminal -> New Terminal)")
-    print("e digita questo comando, poi premi Invio:\n")
-    print("    pip install requests\n")
-    print("Dopo l'installazione, esegui di nuovo lo script.")
+    print("\n[ERR] “The ‘requests’ library is missing.”)
     sys.exit(1)
 
 
 # =====================================================================
-# CONFIGURAZIONE - puoi modificare questi valori se vuoi
+# SETUP 
 # =====================================================================
 
-SAMPLE_SIZE = 5000           # numero di trial da scaricare
-PAGE_SIZE = 1000             # 1000 è il massimo consentito dall'API
-SLEEP_BETWEEN_REQUESTS = 0.2 # secondi di pausa tra chiamate (5 req/s)
-MAX_RETRIES = 5              # tentativi su errore di rete
-OUTPUT_DIR = "./data_exploration"             # cartella in cui salvare i file output
-
+SAMPLE_SIZE = 5000           
+PAGE_SIZE = 1000            
+SLEEP_BETWEEN_REQUESTS = 0.2 
+MAX_RETRIES = 5              
+OUTPUT_DIR = "./data_exploration"           # folder to save the output to 
 API_BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 
-# Campi che vogliamo estrarre dall'API (riduce il payload del ~40%)
-# I nomi seguono la sintassi dell'API v2 (CamelCase, non json-path).
+# Fields we want to extract from the API
 FIELDS_TO_FETCH = [
     "NCTId",
     "BriefTitle",
@@ -90,13 +81,13 @@ FIELDS_TO_FETCH = [
 
 
 # =====================================================================
-# FUNZIONE 1 - Scarica un batch di trial dall'API
+# FUNCTION 1 - Get a batch of trials from the API
 # =====================================================================
 
 def fetch_page(page_token=None):
     """
-    Scarica una pagina di trial dall'API.
-    Restituisce: (lista di trial, prossimo page_token oppure None)
+    Get a trials page from the API.
+    Returns: (trial list, next page_token, or None)
     """
     params = {
         "pageSize": PAGE_SIZE,
@@ -106,15 +97,14 @@ def fetch_page(page_token=None):
     if page_token:
         params["pageToken"] = page_token
 
-    # Retry con backoff esponenziale in caso di errore di rete o 429
+    # Retry with exponential backoff on network error or 429
     for attempt in range(MAX_RETRIES):
         try:
             response = requests.get(API_BASE_URL, params=params, timeout=60)
             if response.status_code == 200:
                 data = response.json()
                 return data.get("studies", []), data.get("nextPageToken")
-            elif response.status_code == 429:
-                # Rate limit, aspettiamo di più
+            elif response.status_code == 429
                 wait = 2 ** attempt
                 print(f"  [WARN] Rate limited (429). Attendo {wait}s...")
                 time.sleep(wait)
@@ -125,18 +115,18 @@ def fetch_page(page_token=None):
             print(f"  [WARN] Errore di rete: {e}. Retry tra {2**attempt}s...")
             time.sleep(2 ** attempt)
 
-    print("  [ERROR] Impossibile completare la richiesta dopo i retry.")
+    print("  [ERR] Unable to complete request after retries.")
     return [], None
 
 
 # =====================================================================
-# FUNZIONE 2 - Estrae un singolo campo da un trial gestendo i moduli annidati
+# FUNCTION 2 - Extracts a single field from a trial by handling nested forms
 # =====================================================================
 
 def safe_get(study, *path, default=None):
     """
-    Naviga in modo sicuro il JSON annidato.
-    Esempio: safe_get(study, 'protocolSection', 'statusModule', 'overallStatus')
+    Safely navigate nested JSON.
+    Example: safe_get(study, 'protocolSection', 'statusModule', 'overallStatus')
     """
     current = study
     for key in path:
@@ -149,13 +139,13 @@ def safe_get(study, *path, default=None):
 
 
 # =====================================================================
-# FUNZIONE 3 - Estrae tutte le variabili rilevanti da un trial
+# FUNCTION 3 - Extracts all relevant variables from a trial
 # =====================================================================
 
 def extract_features(study):
     """
-    Da un trial JSON estrae un dict piatto con le variabili che vogliamo profilare.
-    Le chiavi del dict corrispondono ai nomi nel Data Dictionary.
+    From a JSON trial it extracts a flat dict with the variables we want to profile.
+    The keys of the dict correspond to the names in the Data Dictionary.
     """
     protocol = safe_get(study, "protocolSection", default={}) or {}
     derived = safe_get(study, "derivedSection", default={}) or {}
@@ -172,20 +162,17 @@ def extract_features(study):
 
     cond_mesh = safe_get(derived, "conditionBrowseModule", "meshes", default=[]) or []
 
-    # Lista delle locations (può essere vuota)
     locations_list = locs.get("locations", []) or []
 
-    # Analizziamo lo status sito-level: per ciascun sito vediamo se c'è 'status'
+    # Let's analyze the site-level status: for each site we see if there is 'status'
     sites_with_status = sum(1 for l in locations_list if l.get("status"))
     sites_with_geopoint = sum(
         1 for l in locations_list
         if l.get("geoPoint") and l["geoPoint"].get("lat") is not None
     )
 
-    # Collaboratori
     collaborators = sponsor.get("collaborators", []) or []
 
-    # Interventi
     interventions = arms.get("interventions", []) or []
 
     return {
@@ -255,13 +242,13 @@ def extract_features(study):
 
 
 # =====================================================================
-# FUNZIONE 4 - Analizza il campione e produce le statistiche
+# FUNCTION 4 - Analyzes the sample and produces statistics
 # =====================================================================
 
 def analyze_sample(records):
     """
-    Calcola le statistiche di missing/coverage/distribuzione sul campione.
-    Restituisce un dict di metriche pronte per il report.
+    Calculate missing/coverage/distribution statistics on the sample.
+    Returns a dict of metrics ready for the report.
     """
     n = len(records)
     if n == 0:
@@ -270,7 +257,7 @@ def analyze_sample(records):
     def pct(num, tot=n):
         return f"{(num / tot * 100):.1f}%" if tot > 0 else "n/a"
 
-    # Missing rate per campo
+    # Missing rate per field
     missing = {}
     fields_to_check = [
         "overallStatus", "statusVerifiedDate", "whyStopped",
@@ -286,26 +273,26 @@ def analyze_sample(records):
         miss = sum(1 for r in records if r.get(f) is None or r.get(f) == "")
         missing[f] = (miss, pct(miss))
 
-    # Distribuzione overallStatus
+    # Distribution overallStatus
     status_dist = Counter(r.get("overallStatus") for r in records)
 
-    # Distribuzione ACTUAL vs ESTIMATED
+    # Distribution ACTUAL vs ESTIMATED
     start_type = Counter(r.get("startDateType") for r in records)
     enroll_type = Counter(r.get("enrollmentType") for r in records)
 
-    # Distribuzione leadSponsorClass
+    # Distribution leadSponsorClass
     sponsor_class = Counter(r.get("leadSponsorClass") for r in records)
 
-    # Distribuzione studyType
+    # Distribution studyType
     study_type = Counter(r.get("studyType") for r in records)
 
-    # Distribuzione sex
+    # Distribution sex
     sex_dist = Counter(r.get("sex") for r in records)
 
     # Coverage MeSH
     mesh_present = sum(1 for r in records if r.get("has_mesh"))
 
-    # Coverage geopoint a livello sito
+    # Site-level geopoint coverage
     total_sites = sum(r.get("n_sites", 0) for r in records)
     total_sites_with_status = sum(r.get("sites_with_status", 0) for r in records)
     total_sites_with_geo = sum(r.get("sites_with_geopoint", 0) for r in records)
@@ -322,11 +309,11 @@ def analyze_sample(records):
     else:
         p50 = p90 = p99 = p_max = big_outliers = 0
 
-    # Distribuzione n_sites
+    # Distribution n_sites
     sites_per_trial = [r.get("n_sites", 0) for r in records]
     avg_sites = sum(sites_per_trial) / len(sites_per_trial) if sites_per_trial else 0
 
-    # whyStopped solo per trial TERMINATED/WITHDRAWN/SUSPENDED
+    # whyStopped only for TERMINATED/WITHDRAWN/SUSPENDED trials
     stopped_statuses = {"TERMINATED", "WITHDRAWN", "SUSPENDED"}
     stopped_trials = [r for r in records if r.get("overallStatus") in stopped_statuses]
     stopped_with_reason = sum(1 for r in stopped_trials if r.get("whyStopped"))
@@ -358,112 +345,111 @@ def analyze_sample(records):
 
 
 # =====================================================================
-# FUNZIONE 5 - Scrive il report leggibile
+# FUNCTION 5 - Writes the report
 # =====================================================================
 
 def write_report(stats, filepath):
-    """Scrive un report di testo leggibile, pronto da incollare nel documento."""
     lines = []
     lines.append("=" * 70)
-    lines.append(" PROFILAZIONE EMPIRICA DEL CAMPIONE — ClinicalTrials.gov API v2")
-    lines.append(f" Generato: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    lines.append(f" Dimensione campione: {stats['n_records']} trial")
+    lines.append(" EMPIRICAL SAMPLE PROFILING — ClinicalTrials.gov API v2")
+    lines.append(f" Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    lines.append(f" Sample size: {stats['n_records']} trial")
     lines.append("=" * 70)
     lines.append("")
 
-    lines.append("SEZIONE 8.4 — Tabella di profilazione (valori empirici)")
+    lines.append("SECTION 8.4 — Profiling table (empirical values)")
     lines.append("-" * 70)
     lines.append("")
-    lines.append("Variabile                          | % missing | Note")
+    lines.append("Variable                            | % missing | Note")
     lines.append("-" * 70)
-    lines.append(f"enrollmentInfo.count               | {stats['missing']['enrollmentCount'][1]:9} | {stats['enrollment_outliers_pct']} sopra 10.000 pazienti (outlier)")
-    lines.append(f"locations[].geoPoint (sito-level)  | {(100 - float(stats['site_geo_coverage_pct'].rstrip('%'))):.1f}%     | Coverage {stats['site_geo_coverage_pct']}")
+    lines.append(f"enrollmentInfo.count               | {stats['missing']['enrollmentCount'][1]:9} | {stats['enrollment_outliers_pct']} on 10,000 patients (outlier)")
+    lines.append(f"locations[].geoPoint (site-level)  | {(100 - float(stats['site_geo_coverage_pct'].rstrip('%'))):.1f}%     | Coverage {stats['site_geo_coverage_pct']}")
     lines.append(f"conditionBrowseModule.meshes[]     | {(100 - float(stats['mesh_coverage_pct'].rstrip('%'))):.1f}%     | Coverage {stats['mesh_coverage_pct']}")
     lines.append(f"overallStatus = UNKNOWN            | n/a       | {stats['status_dist'].get('UNKNOWN', 0)} record ({stats['status_dist'].get('UNKNOWN', 0)*100/stats['n_records']:.1f}%)")
-    lines.append(f"startDateStruct.type = ACTUAL      | n/a       | {stats['start_type_dist'].get('ACTUAL', 0)*100/stats['n_records']:.1f}% del totale")
-    lines.append(f"enrollmentInfo.type = ACTUAL       | n/a       | {stats['enroll_type_dist'].get('ACTUAL', 0)*100/stats['n_records']:.1f}% del totale")
-    lines.append(f"locations[].status presente        | n/a       | Coverage {stats['site_status_coverage_pct']}")
+    lines.append(f"startDateStruct.type = ACTUAL      | n/a       | {stats['start_type_dist'].get('ACTUAL', 0)*100/stats['n_records']:.1f}% del total")
+    lines.append(f"enrollmentInfo.type = ACTUAL       | n/a       | {stats['enroll_type_dist'].get('ACTUAL', 0)*100/stats['n_records']:.1f}% del total")
+    lines.append(f"locations[].status present         | n/a       | Coverage {stats['site_status_coverage_pct']}")
     lines.append(f"whyStopped (per TERMINATED)        | n/a       | Coverage {stats['stopped_with_reason_pct']}")
     lines.append("")
 
     lines.append("=" * 70)
-    lines.append("DISTRIBUZIONE overallStatus")
+    lines.append("DISTRIBUTION overallStatus")
     lines.append("-" * 70)
     for status, count in stats['status_dist'].most_common():
         lines.append(f"  {str(status):30} {count:6} ({count*100/stats['n_records']:.1f}%)")
     lines.append("")
 
-    lines.append("DISTRIBUZIONE leadSponsor.class")
+    lines.append("DISTRIBUTION leadSponsor.class")
     lines.append("-" * 70)
     for cls, count in stats['sponsor_class_dist'].most_common():
         lines.append(f"  {str(cls):30} {count:6} ({count*100/stats['n_records']:.1f}%)")
     lines.append("")
 
-    lines.append("DISTRIBUZIONE studyType")
+    lines.append("DISTRIBUTION studyType")
     lines.append("-" * 70)
     for st, count in stats['study_type_dist'].most_common():
         lines.append(f"  {str(st):30} {count:6} ({count*100/stats['n_records']:.1f}%)")
     lines.append("")
 
-    lines.append("DISTRIBUZIONE sex")
+    lines.append("DISTRIBUTION sex")
     lines.append("-" * 70)
     for s, count in stats['sex_dist'].most_common():
         lines.append(f"  {str(s):30} {count:6} ({count*100/stats['n_records']:.1f}%)")
     lines.append("")
 
-    lines.append("DISTRIBUZIONE startDate.type")
+    lines.append("DISTRIBUTION startDate.type")
     lines.append("-" * 70)
     for t, count in stats['start_type_dist'].most_common():
         lines.append(f"  {str(t):30} {count:6} ({count*100/stats['n_records']:.1f}%)")
     lines.append("")
 
-    lines.append("DISTRIBUZIONE enrollmentInfo.type")
+    lines.append("DISTRIBUTION enrollmentInfo.type")
     lines.append("-" * 70)
     for t, count in stats['enroll_type_dist'].most_common():
         lines.append(f"  {str(t):30} {count:6} ({count*100/stats['n_records']:.1f}%)")
     lines.append("")
 
     lines.append("=" * 70)
-    lines.append("STATISTICHE enrollmentInfo.count")
+    lines.append("STATS enrollmentInfo.count")
     lines.append("-" * 70)
-    lines.append(f"  Mediana (p50):                   {stats['enrollment_p50']}")
+    lines.append(f"  Median (p50):                    {stats['enrollment_p50']}")
     lines.append(f"  p90:                             {stats['enrollment_p90']}")
     lines.append(f"  p99:                             {stats['enrollment_p99']}")
     lines.append(f"  Max:                             {stats['enrollment_max']}")
-    lines.append(f"  Trial con > 10.000 pazienti:     {stats['enrollment_big_outliers']} ({stats['enrollment_outliers_pct']})")
+    lines.append(f"  Trial with > 10.000 patients:    {stats['enrollment_big_outliers']} ({stats['enrollment_outliers_pct']})")
     lines.append("")
 
-    lines.append("STATISTICHE locations[]")
+    lines.append("STATS locations[]")
     lines.append("-" * 70)
-    lines.append(f"  Siti totali nel campione:        {stats['total_sites']}")
-    lines.append(f"  Media siti per trial:            {stats['avg_sites_per_trial']}")
+    lines.append(f"  Total sites in the sample:       {stats['total_sites']}")
+    lines.append(f"  Average sites for trials:        {stats['avg_sites_per_trial']}")
     lines.append(f"  Coverage locations[].status:     {stats['site_status_coverage_pct']}")
     lines.append(f"  Coverage locations[].geoPoint:   {stats['site_geo_coverage_pct']}")
     lines.append("")
 
     lines.append("=" * 70)
-    lines.append("MISSING RATE PER VARIABILE (dettaglio completo)")
+    lines.append("MISSING RATE PER VARIABLE")
     lines.append("-" * 70)
     for field, (count, pct_str) in stats['missing'].items():
-        lines.append(f"  {field:35} {pct_str:8} ({count} mancanti su {stats['n_records']})")
+        lines.append(f"  {field:35} {pct_str:8} ({count} missing out of {stats['n_records']})")
     lines.append("")
 
     lines.append("=" * 70)
-    lines.append("ISTRUZIONI PER L'USO DI QUESTI DATI")
+    lines.append("INSTRUCTIONS FOR USING THIS DATA")
     lines.append("=" * 70)
     lines.append("")
-    lines.append("1. Sezione 8.4 del Data Dictionary:")
-    lines.append("   sostituisci '(da misurare)' con i valori della tabella in cima.")
+    lines.append("1. Section 8.4 of the Data Dictionary:")
+    lines.append("   Replace ‘(to be measured)’ with the values from the table at the top.")
     lines.append("")
-    lines.append("2. Colonna 'Data Quality Alert' nella tabella della sezione 6:")
-    lines.append("   confronta i tuoi numeri reali con le stime nel documento e")
-    lines.append("   aggiorna quelle che divergono significativamente.")
+    lines.append("2. The ‘Data Quality Alert’ column in the table in Section 6:")
+    lines.append("   Compare your actual numbers with the estimates in the document and")
+    lines.append("   update any that differ significantly.")
     lines.append("")
-    lines.append("3. Aggiorna la sezione 5 (Note metodologiche): la frase sulla")
-    lines.append("   'verifica empirica' può ora citare la data del campione.")
+    lines.append("3. Update Section 5 (Methodological Notes): the sentence about")
+    lines.append("   ‘empirical verification’ can now include the sample date.")
     lines.append("")
-    lines.append("4. Il file sample_profile_data.csv contiene i dati grezzi se vuoi")
-    lines.append("   fare analisi aggiuntive in Excel o pandas.")
+    lines.append("4. The file sample_profile_data.csv contains the raw data if you want")
+    lines.append("   to perform additional analysis in Excel or pandas.")
     lines.append("")
 
     with open(filepath, "w", encoding="utf-8") as f:
@@ -471,16 +457,15 @@ def write_report(stats, filepath):
 
 
 # =====================================================================
-# FUNZIONE 6 - Salva i dati grezzi in CSV per analisi successive
+# FUNCTION 6 - Saves raw data in CSV format for further analysis
 # =====================================================================
 
 def write_csv(records, filepath):
-    """Salva tutti i record estratti in un file CSV."""
+    """Save all extracted records to a CSV file."""
     if not records:
         return
-    # Tutti i campi possibili
     fieldnames = list(records[0].keys())
-    # Sostituiamo le liste con la loro lunghezza o stringa joined
+
     with open(filepath, "w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -495,15 +480,14 @@ def write_csv(records, filepath):
 
 
 # =====================================================================
-# MAIN - punto di ingresso dello script
+# MAIN - script entry point ###########
 # =====================================================================
 
 def main():
     print("=" * 70)
-    print(" Profilazione del campione — ClinicalTrials.gov API v2")
+    print(" Sample Profiling — ClinicalTrials.gov API v2")
     print("=" * 70)
-    print(f"\nObiettivo: scaricare {SAMPLE_SIZE} trial e analizzarli.")
-    print(f"Stima tempo: 10-30 minuti (dipende dalla connessione).\n")
+    print(f"\nGoal: Get {SAMPLE_SIZE} trials and analyze them.")
 
     records = []
     page_token = None
@@ -513,12 +497,12 @@ def main():
 
     while len(records) < SAMPLE_SIZE:
         pages_fetched += 1
-        print(f"Pagina {pages_fetched}: scarico fino a {PAGE_SIZE} trial "
-              f"(totale finora: {len(records)})...")
+        print(f"Page {pages_fetched}: obtaining up to {PAGE_SIZE} trials"
+              f"(total so far: {len(records)})...")
 
         studies, page_token = fetch_page(page_token)
         if not studies:
-            print("  [INFO] Nessun trial restituito, interrompo.")
+            print("  [INFO] No trials found; Stop.")
             break
 
         for s in studies:
@@ -528,17 +512,17 @@ def main():
                 if len(records) >= SAMPLE_SIZE:
                     break
             except Exception as e:
-                print(f"  [WARN] Errore nel parsing di un trial: {e}")
+                print(f"  [WARN] Error parsing a trial: {e}")
 
         if not page_token:
-            print("  [INFO] Non ci sono altre pagine, interrompo.")
+            print("  [INFO] There are no more pages, interrupt.")
             break
 
         time.sleep(SLEEP_BETWEEN_REQUESTS)
 
     elapsed = time.time() - start_time
-    print(f"\nScaricati {len(records)} trial in {elapsed:.1f} secondi.")
-    print("Analizzo il campione...\n")
+    print(f"\nGet {len(records)} trial in {elapsed:.1f} seconds.")
+    print("Analyzing the sample...\n")
 
     # Analisi
     stats = analyze_sample(records)
@@ -551,13 +535,13 @@ def main():
     write_csv(records, csv_path)
 
     print("=" * 70)
-    print(" COMPLETATO")
+    print(" COMPLETED")
     print("=" * 70)
-    print(f"\nFile generati nella cartella corrente:")
+    print(f"\nFiles generated in the current folder:")
     print(f"  - {report_path}")
     print(f"  - {csv_path}")
-    print(f"\nApri sample_profile_report.txt per vedere i risultati.")
-    print(f"I dati grezzi sono in sample_profile_data.csv (utile per Excel).\n")
+    print(f"\nOpen sample_profile_report.txt to view the results.")
+    print(f"The raw data is in sample_profile_data.csv (useful for Excel).\n")
 
 
 if __name__ == "__main__":
