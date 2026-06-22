@@ -40,6 +40,7 @@ TRIALS_SCHEMA = StructType([
     StructField("enrollment_duration_months", DoubleType()),
     StructField("trial_velocity", DoubleType()),
     StructField("phase", StringType()), 
+    StructField("mesh_conditions_ids", ArrayType(StringType()))
 ])
 
 SITES_SCHEMA = StructType([
@@ -51,13 +52,18 @@ SITES_SCHEMA = StructType([
     StructField("country", StringType()),
     StructField("latitude", DoubleType()),
     StructField("longitude", DoubleType()),
-    StructField("conditions", ArrayType(StringType())),
+    StructField("mesh_conditions_ids", ArrayType(StringType())), 
+])
+
+MESH_MAPPING_SCHEMA = StructType([
+    StructField("mesh_condition_id", StringType()),
+    StructField("mesh_condition_name", StringType())
 ])
 
 _DAYS_PER_MONTH = 30.44
 
 # Global reference point for executor initializations
-_GLOBAL_RULES_BROADCAST = None
+# _GLOBAL_RULES_BROADCAST = None
 
 
 def _duration_months(start_str, end_str):
@@ -76,35 +82,6 @@ def _trial_velocity(enrollment_count, duration_months):
     if not enrollment_count or not duration_months or duration_months <= 0:
         return 0.0
     return round(enrollment_count / duration_months, 4)
-
-
-def _apply_regex_mapping(condition_name, rules):
-    """Normalizes variation text strings using regex rules maps."""
-    if not condition_name:
-        return "GENERAL"
-        
-    # 1. Convert to string, force Uppercase, strip whitespace
-    c_clean = str(condition_name).strip().upper()
-    
-    # 2. Strip quotes, brackets, and literal database formatting characters
-    c_clean = re.sub(r'[\"\'\[\]\(\)]', '', c_clean)
-    
-    # 3. Replace hyphens, underscores, commas, and punctuation with a single space
-    c_clean = re.sub(r'[\-_\,\.\;\:]', ' ', c_clean)
-    
-    # 4. Collapse multiple spaces into a single uniform whitespace
-    c_clean = re.sub(r'\s+', ' ', c_clean).strip()
-    if not rules:
-        return c_clean.title()
-        
-    # Execute regex sequence scans
-    for rule in rules:
-        category = rule["category"]
-        if any(pattern.search(c_clean) for pattern in rule["patterns"]):
-            return category
-            
-    return c_clean.title()
-
 
 def parse_study(json_str, kafka_ts):
     """Parses raw bronze trial JSON records cleanly safely inside spark executors."""
@@ -133,6 +110,32 @@ def parse_study(json_str, kafka_ts):
     enrollment_count = int(enrollment.get("count") or 0)
     duration_months = _duration_months(start_date, primary_completion_date)
 
+    derived = study.get("derivedSection", {})
+    cond_browse = derived.get("conditionBrowseModule", {})
+    
+    mesh_terms = cond_browse.get("meshes") 
+    
+    if isinstance(mesh_terms, str):
+        try:
+            mesh_terms = json.loads(mesh_terms)
+        except:
+            mesh_terms = None
+            
+    mesh_ids = []
+    mesh_mappings = []
+
+    if isinstance(mesh_terms, list):
+        for term in mesh_terms:
+            if isinstance(term, dict) and term.get("id"):
+                m_id = term["id"]
+                m_term = term.get("term") or "UNKNOWN TERM"
+                
+                mesh_ids.append(m_id)
+                
+                mesh_mappings.append({
+                    "mesh_condition_id": m_id,
+                    "mesh_condition_name": m_term
+                })
     trial = {
         "nct_id": nct_id,
         "brief_title": identification.get("briefTitle") or "UNKNOWN TITLE",
@@ -151,36 +154,9 @@ def parse_study(json_str, kafka_ts):
         "trial_velocity": _trial_velocity(enrollment_count, duration_months),
         "phase": (
             lambda p: "UNKNOWN" if p in ["NA", "UNKNOWN"] else p
-        )((design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper())
+        )((design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper()),
+        "mesh_conditions_ids": mesh_ids
     }
-
-    # Extract conditions using rules unpacked from distributed Broadcast context
-    raw_conditions = protocol.get("conditionsModule", {}).get("conditions") or []
-    cleaned_conditions = []
-    
-    # Safely unpack reference points inside Spark executor worker threads
-    rules_to_use = _GLOBAL_RULES_BROADCAST.value if _GLOBAL_RULES_BROADCAST else []
-
-    for c in raw_conditions:
-        if not c:
-            continue
-        
-        # Guard filters against systemic structural noise or description blocks
-        c_str = str(c).strip()
-        if len(c_str) < 2 or len(c_str) > 120:
-            continue
-            
-        c_mapped = _apply_regex_mapping(c_str, rules_to_use)
-        
-        # Standard filter limits
-        if len(c_mapped) < 2 or len(c_mapped) > 75:
-            continue
-            
-        if c_mapped not in cleaned_conditions:
-            cleaned_conditions.append(c_mapped)
-
-    if not cleaned_conditions:
-        cleaned_conditions = ["GENERAL"]
 
     sites = [
         {
@@ -192,13 +168,18 @@ def parse_study(json_str, kafka_ts):
             "country": loc.get("country") or "UNKNOWN",
             "latitude": float(loc.get("geoPoint", {}).get("lat") or 0.0),
             "longitude": float(loc.get("geoPoint", {}).get("lon") or 0.0),
-            "conditions": cleaned_conditions,
+            "mesh_conditions_ids": mesh_ids
         }
         for loc in protocol.get("contactsLocationsModule", {}).get("locations", [])
     ]
 
-    return {"nct_id": nct_id, "trial": trial, "sites": sites, "kafka_ts": kafka_ts}
-
+    return {
+        "nct_id": nct_id, 
+        "trial": trial, 
+        "sites": sites, 
+        "mesh_mappings": mesh_mappings, 
+        "kafka_ts": kafka_ts
+    }
 
 def upsert_trials_partition(rows):
     import psycopg2
@@ -219,7 +200,7 @@ def upsert_trials_partition(rows):
                         nct_id, brief_title, brief_summary, study_type, primary_purpose,
                         overall_status, lead_sponsor_class, enrollment_count, start_date,
                         primary_completion_date, sex, minimum_age_years, maximum_age_years, 
-                        enrollment_duration_months, trial_velocity, phase, transformed_at
+                        enrollment_duration_months, trial_velocity, phase, mesh_conditions_ids, transformed_at
                     ) VALUES %s
                     ON CONFLICT (nct_id) DO UPDATE SET
                         brief_title = EXCLUDED.brief_title,
@@ -237,6 +218,7 @@ def upsert_trials_partition(rows):
                         enrollment_duration_months = EXCLUDED.enrollment_duration_months,
                         trial_velocity = EXCLUDED.trial_velocity,
                         phase = EXCLUDED.phase,
+                        mesh_conditions_ids = EXCLUDED.mesh_conditions_ids,
                         transformed_at = EXCLUDED.transformed_at
                     """,
                     [
@@ -244,11 +226,11 @@ def upsert_trials_partition(rows):
                             r.nct_id, r.brief_title, r.brief_summary, r.study_type, r.primary_purpose,
                             r.overall_status, r.lead_sponsor_class, r.enrollment_count, r.start_date,
                             r.primary_completion_date, r.sex, r.minimum_age_years, r.maximum_age_years, 
-                            r.enrollment_duration_months, r.trial_velocity, r.phase,
+                            r.enrollment_duration_months, r.trial_velocity, r.phase, r.mesh_conditions_ids
                         )
                         for r in rows
                     ],
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 )
     finally:
         conn.close()
@@ -271,14 +253,14 @@ def insert_sites_partition(rows):
                     """
                     INSERT INTO silver.trial_sites (
                         nct_id, facility_name, city, state, zip, country,
-                        latitude, longitude, conditions, transformed_at
+                        latitude, longitude, mesh_conditions_ids, transformed_at
                     )
                     VALUES %s
                     """,
                     [
                         (
                             r.nct_id, r.facility_name, r.city, r.state, r.zip, r.country,
-                            r.latitude, r.longitude, r.conditions,
+                            r.latitude, r.longitude, r.mesh_conditions_ids,
                         )
                         for r in rows
                     ],
@@ -305,6 +287,50 @@ def delete_existing_sites(nct_ids):
     finally:
         conn.close()
 
+def upsert_mesh_dimension_partition(rows):
+    import psycopg2
+    import psycopg2.extras
+
+    rows = list(rows)
+    if not rows:
+        return
+    dsn = build_dsn_from_env()
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO gold.dim_mesh_conditions (mesh_condition_id, mesh_condition_name)
+                    VALUES %s
+                    ON CONFLICT (mesh_condition_id) DO NOTHING
+                    """,
+                    [
+                        (r.mesh_condition_id, r.mesh_condition_name)
+                        for r in rows
+                    ],
+                    template="(%s, %s)",
+                )
+    finally:
+        conn.close()
+
+def delete_existing_sites(nct_ids):
+    if not nct_ids:
+        return
+    import psycopg2
+
+    dsn = build_dsn_from_env()
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM silver.trial_sites WHERE nct_id = ANY(%s)",
+                    (list(nct_ids),),
+                )
+    finally:
+        conn.close()
 
 def produce_to_silver_topic(trial_dicts):
     producer = build_kafka_producer()
@@ -321,33 +347,33 @@ def produce_to_silver_topic(trial_dicts):
 
 
 def main():
-    global _GLOBAL_RULES_BROADCAST
+    # global _GLOBAL_RULES_BROADCAST
     load_dotenv()
     
-    compiled_rules = []
-    mapping_path = "spark_jobs/mapping_rules.json"
+    # compiled_rules = []
+    # mapping_path = "spark_jobs/mapping_rules.json"
     
-    if os.path.exists(mapping_path):
-        try:
-            with open(mapping_path, "r", encoding="utf-8") as f:
-                raw_rules = json.load(f)
-            for r in raw_rules:
-                compiled_rules.append({
-                    "category": r["category"],
-                    "patterns": [re.compile(p, re.IGNORECASE) for p in r["patterns"]]
-                })
-            print(f"[INFO]: Compiled {len(compiled_rules)} string mapping groups.")
-        except Exception as e:
-            print(f"[ERROR]: Error parsing mapping_rules.json: {e}")
-    else:
-        print(f"[WARNING]: Mapping file {mapping_path} missing.")
+    # if os.path.exists(mapping_path):
+    #     try:
+    #         with open(mapping_path, "r", encoding="utf-8") as f:
+    #             raw_rules = json.load(f)
+    #         for r in raw_rules:
+    #             compiled_rules.append({
+    #                 "category": r["category"],
+    #                 "patterns": [re.compile(p, re.IGNORECASE) for p in r["patterns"]]
+    #             })
+    #         print(f"[INFO]: Compiled {len(compiled_rules)} string mapping groups.")
+    #     except Exception as e:
+    #         print(f"[ERROR]: Error parsing mapping_rules.json: {e}")
+    # else:
+    #     print(f"[WARNING]: Mapping file {mapping_path} missing.")
 
     # Run Spark Session
     spark = SparkSession.builder.appName("bronze_to_silver").getOrCreate()
     spark.sparkContext.setLogLevel("ERROR") 
 
-    # Broadicast globally to preserve reference visibility inside the tasks
-    _GLOBAL_RULES_BROADCAST = spark.sparkContext.broadcast(compiled_rules)
+    
+    # _GLOBAL_RULES_BROADCAST = spark.sparkContext.broadcast(compiled_rules)
 
     kafka_df = (
         spark.read.format("kafka")
@@ -376,9 +402,15 @@ def main():
     trials_df = spark.createDataFrame(deduped_rdd.map(lambda kv: kv[1]["trial"]), schema=TRIALS_SCHEMA)
     sites_df = spark.createDataFrame(deduped_rdd.flatMap(lambda kv: kv[1]["sites"]), schema=SITES_SCHEMA)
 
+    mesh_df = spark.createDataFrame(
+        deduped_rdd.flatMap(lambda kv: kv[1]["mesh_mappings"]), 
+        schema=MESH_MAPPING_SCHEMA
+    ).distinct()
+
     nct_ids_in_batch = [row.nct_id for row in trials_df.select("nct_id").collect()]
     delete_existing_sites(nct_ids_in_batch)
 
+    mesh_df.foreachPartition(upsert_mesh_dimension_partition) 
     trials_df.foreachPartition(upsert_trials_partition)
     sites_df.foreachPartition(insert_sites_partition)
 
@@ -389,7 +421,7 @@ def main():
         f"[INFO]: Processing completed: total={total_messages} saved={parsed_ok} skipped={skipped}"
     )
 
-    _GLOBAL_RULES_BROADCAST.unpersist()
+    # _GLOBAL_RULES_BROADCAST.unpersist()
     spark.stop()
 
 

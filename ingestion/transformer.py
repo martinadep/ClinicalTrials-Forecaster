@@ -29,7 +29,6 @@ def parse_date(date_str):
     except Exception:
         return None
 
-
 def extract_trial_fields(study):
     """Extract normalized fields used by bronze tables from one study payload."""
     protocol = study.get("protocolSection", {})
@@ -43,6 +42,10 @@ def extract_trial_fields(study):
 
     design_info = design.get("designInfo", {})
     enrollment = design.get("enrollmentInfo", {})
+    
+    condition_browse = derived.get("conditionBrowseModule", {})
+    mesh_terms_list = condition_browse.get("meshes", []) 
+    lead_sponsor_class = sponsor.get("leadSponsor", {}).get("class")
 
     return {
         "nct_id": identification.get("nctId"),
@@ -51,7 +54,10 @@ def extract_trial_fields(study):
         "brief_summary": description.get("briefSummary"),
         "official_title": identification.get("officialTitle"),
         "acronym": identification.get("acronym"),
-        "conditions": protocol.get("conditionsModule", {}).get("conditions"),
+        
+        "conditions": json.dumps(protocol.get("conditionsModule", {}).get("conditions", [])),
+        "mesh_conditions": json.dumps(mesh_terms_list), 
+        
         "keywords": protocol.get("conditionsModule", {}).get("keywords"),
         "study_type": design.get("studyType"),
         "phases": design.get("phases"),
@@ -61,13 +67,15 @@ def extract_trial_fields(study):
         "enrollment_count": enrollment.get("count"),
         "enrollment_type": enrollment.get("type"),
         "overall_status": status.get("overallStatus"),
-        "start_date": parse_date(status.get("startDateStruct", {}).get("date") if status.get("startDateStruct") else status.get("startDateStruct")),
-        "primary_completion_date": parse_date(status.get("primaryCompletionDateStruct", {}).get("date") if status.get("primaryCompletionDateStruct") else None),
-        "completion_date": parse_date(status.get("completionDateStruct", {}).get("date") if status.get("completionDateStruct") else None),
-        "study_first_post_date": parse_date(status.get("studyFirstPostDateStruct", {}).get("date") if status.get("studyFirstPostDateStruct") else None),
-        "last_update_post_date": parse_date(status.get("lastUpdatePostDateStruct", {}).get("date") if status.get("lastUpdatePostDateStruct") else None),
-        "lead_sponsor": sponsor.get("leadSponsor"),
-        "organization_class": identification.get("organization", {}).get("class") if identification.get("organization") else None,
+        
+        "start_date": parse_date(status.get("startDateStruct")),
+        "primary_completion_date": parse_date(status.get("primaryCompletionDateStruct")),
+        "completion_date": parse_date(status.get("completionDateStruct")),
+        "study_first_post_date": parse_date(status.get("studyFirstPostDateStruct")),
+        "last_update_post_date": parse_date(status.get("lastUpdatePostDateStruct")),
+        
+        "lead_sponsor_class": lead_sponsor_class,
+        "organization_class": identification.get("organization", {}).get("class"),
         "collaborator_names": [c.get("name") for c in sponsor.get("collaborators", []) if c.get("name")],
         "responsible_party": sponsor.get("responsibleParty"),
         "eligibility_criteria": eligibility.get("eligibilityCriteria"),
@@ -75,6 +83,6 @@ def extract_trial_fields(study):
         "sex": eligibility.get("sex"),
         "minimum_age": eligibility.get("minimumAge"),
         "maximum_age": eligibility.get("maximumAge"),
-        "locations": protocol.get("contactsLocationsModule", {}).get("locations"),
-        "version_holder": derived.get("miscInfoModule", {}).get("versionHolder") if derived.get("miscInfoModule") else None,
+        "locations": json.dumps(protocol.get("contactsLocationsModule", {}).get("locations", [])),
+        "version_holder": derived.get("miscInfoModule", {}).get("versionHolder"),
     }

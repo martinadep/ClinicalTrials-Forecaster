@@ -66,10 +66,8 @@ def _upsert_raw_trial(cur, fields, raw_payload):
 
 def _build_trial_values(fields, psycopg2_extras):
     """Build positional values tuple for bronze.trials write operations."""
-    lead_sponsor = fields.get("lead_sponsor")
-    lead_sponsor_class = None
-    if isinstance(lead_sponsor, dict):
-        lead_sponsor_class = lead_sponsor.get("class")
+    
+    lead_sponsor_class = fields.get("lead_sponsor_class")
     if lead_sponsor_class is None:
         lead_sponsor_class = fields.get("organization_class")
 
@@ -77,7 +75,8 @@ def _build_trial_values(fields, psycopg2_extras):
         fields["nct_id"],
         fields["brief_title"],
         fields.get("brief_summary"),
-        psycopg2_extras.Json(fields["conditions"]) if fields["conditions"] is not None else None,
+        fields["conditions"],       
+        fields["mesh_conditions"],  
         fields["study_type"],
         fields["phases"],
         fields["primary_purpose"],
@@ -92,7 +91,7 @@ def _build_trial_values(fields, psycopg2_extras):
         fields["sex"],
         fields["minimum_age"],
         fields["maximum_age"],
-        psycopg2_extras.Json(fields["locations"]) if fields["locations"] else None,
+        fields["locations"],         
     )
 
 
@@ -101,16 +100,17 @@ def _upsert_trial_row(cur, trial_values, nct_id):
     cur.execute(
         """
         INSERT INTO bronze.trials (
-            nct_id, brief_title, brief_summary, conditions, study_type, phases,
+            nct_id, brief_title, brief_summary, conditions, mesh_conditions, study_type, phases,
             primary_purpose, enrollment_count, overall_status, start_date,
             primary_completion_date, lead_sponsor_class, collaborator_names,
             eligibility_criteria, healthy_volunteers, sex, minimum_age, maximum_age,
             locations
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (nct_id) DO UPDATE SET
             brief_title = EXCLUDED.brief_title,
             brief_summary = EXCLUDED.brief_summary,
             conditions = EXCLUDED.conditions,
+            mesh_conditions = EXCLUDED.mesh_conditions,
             study_type = EXCLUDED.study_type,
             phases = EXCLUDED.phases,
             primary_purpose = EXCLUDED.primary_purpose,
@@ -130,7 +130,6 @@ def _upsert_trial_row(cur, trial_values, nct_id):
         """,
         trial_values,
     )
-
 
 def insert_study_into_db(study, dsn=None):
     """Insert or update a study in bronze raw/current tables."""
