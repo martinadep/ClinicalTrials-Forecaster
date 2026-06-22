@@ -1,9 +1,9 @@
 """
-Train the recruitment-velocity Random Forest model (Spark MLlib).
+Train the recruitment-velocity Gradient Boosted Trees model (Spark MLlib).
 
 Loads gold.trial_features via JDBC (read-only), builds the feature pipeline from
-features.py, trains a RandomForestRegressor on log1p(target_velocity) to handle
-its right skew, evaluates in real units, and saves the fitted PipelineModel to
+features.py, trains a GBTRegressor on log1p(target_velocity) to handle its right
+skew, evaluates in real units, and saves the fitted PipelineModel to
 models/artifacts/velocity_pipeline.
 
 Run directly: python -m models.train
@@ -28,7 +28,7 @@ load_dotenv()
 
 from pyspark.ml import Pipeline
 from pyspark.ml.evaluation import RegressionEvaluator
-from pyspark.ml.regression import RandomForestRegressor
+from pyspark.ml.regression import GBTRegressor
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
@@ -43,7 +43,7 @@ DEFAULTS_PATH = os.path.join(ARTIFACTS_DIR, "defaults.json")
 TARGET_COL = "target_velocity"
 LOG_TARGET_COL = "log_target"
 RANDOM_STATE = 42
-NUM_TREES = 200
+MAX_ITER = 100  # number of boosting rounds (GBT's analogue of RF's numTrees)
 TOP_N_IMPORTANCES = 15
 
 # Champion/challenger promotion gate: a freshly trained model only replaces the
@@ -71,7 +71,6 @@ def compute_optional_field_defaults(train_df):
         "lead_sponsor_class": mode_of("lead_sponsor_class"),
         "sex": mode_of("sex"),
         "num_conditions": median_of("num_conditions"),
-        "duration_months": median_of("duration_months"),
     }
 
 
@@ -118,10 +117,10 @@ def main():
     train_count, test_count = train_df.count(), test_df.count()
 
     feature_stages, features_col = build_feature_stages()
-    rf = RandomForestRegressor(
-        labelCol=LOG_TARGET_COL, featuresCol=features_col, numTrees=NUM_TREES, seed=RANDOM_STATE
+    gbt = GBTRegressor(
+        labelCol=LOG_TARGET_COL, featuresCol=features_col, maxIter=MAX_ITER, seed=RANDOM_STATE
     )
-    pipeline = Pipeline(stages=feature_stages + [rf])
+    pipeline = Pipeline(stages=feature_stages + [gbt])
 
     fitted_pipeline = pipeline.fit(train_df)
 
@@ -134,8 +133,8 @@ def main():
     r2 = RegressionEvaluator(labelCol=TARGET_COL, predictionCol="prediction_real", metricName="r2").evaluate(predictions)
 
     feature_names = get_feature_names(predictions, features_col)
-    rf_model = fitted_pipeline.stages[-1]
-    importances = sorted(zip(feature_names, rf_model.featureImportances.toArray()), key=lambda x: x[1], reverse=True)
+    gbt_model = fitted_pipeline.stages[-1]
+    importances = sorted(zip(feature_names, gbt_model.featureImportances.toArray()), key=lambda x: x[1], reverse=True)
 
     print(f"[INFO]: rows loaded={loaded_count} dropped(null target)={dropped_count} "
           f"train={train_count} test={test_count}")

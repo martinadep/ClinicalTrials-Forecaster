@@ -83,9 +83,9 @@ def _get_defaults():
 def _resolve_trial_params(trial_params, candidate_sites):
     """Validate required fields and fill in optional ones.
 
-    lead_sponsor_class, sex, num_conditions, duration_months are optional --
-    missing values fall back to the training set's mode (categoricals) or
-    median (numerics), persisted in defaults.json by train.py.
+    lead_sponsor_class, sex, num_conditions are optional -- missing values fall
+    back to the training set's mode (categoricals) or median (numerics),
+    persisted in defaults.json by train.py.
 
     n_sites is handled separately: it's the user's *planned* site count, so a
     dataset-wide default would be a poor proxy. If omitted, we fall back to
@@ -98,7 +98,7 @@ def _resolve_trial_params(trial_params, candidate_sites):
 
     defaults = _get_defaults()
     resolved = dict(trial_params)
-    for field in ["lead_sponsor_class", "sex", "num_conditions", "duration_months"]:
+    for field in ["lead_sponsor_class", "sex", "num_conditions"]:
         if resolved.get(field) is None:
             resolved[field] = defaults[field]
     if resolved.get("n_sites") is None:
@@ -122,7 +122,6 @@ def _build_candidate_row(resolved_trial_params, site):
         "phase": resolved_trial_params["phase"],
         "enrollment_count": resolved_trial_params["enrollment_count"],
         "num_conditions": resolved_trial_params["num_conditions"],
-        "duration_months": resolved_trial_params["duration_months"],
         "n_sites": resolved_trial_params["n_sites"],
         "avg_site_exp": site.get("n_trials"),
         "avg_site_vel": site.get("avg_velocity"),
@@ -133,8 +132,8 @@ def predict_ranking(trial_params: dict, candidate_sites: list):
     """Score each candidate site for the planned trial, return ranked (site, predicted_velocity).
 
     trial_params required fields: study_type, primary_purpose, phase, enrollment_count.
-    Optional: lead_sponsor_class, sex, num_conditions, duration_months, n_sites --
-    see _resolve_trial_params for how missing values are filled in.
+    Optional: lead_sponsor_class, sex, num_conditions, n_sites -- see
+    _resolve_trial_params for how missing values are filled in.
 
     candidate_sites: pre-fetched gold.site_history rows (dicts with at least
     n_trials/avg_velocity, plus whatever identifying fields the caller wants

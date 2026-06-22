@@ -24,13 +24,18 @@ CATEGORICAL_COLS = ["primary_purpose", "lead_sponsor_class", "sex", "phase", "st
 # which includes each trial's own velocity contribution. This will likely
 # dominate feature importance for that reason. A production version would
 # compute site stats using only trials completed before each trial's start_date.
-NUMERIC_COLS = ["enrollment_count", "n_sites", "num_conditions", "duration_months", "avg_site_exp", "avg_site_vel"]
+NUMERIC_COLS = ["enrollment_count", "n_sites", "num_conditions", "avg_site_exp", "avg_site_vel"]
 
 # Deliberately NOT included (the assembled "features" vector only ever draws
 # from the one-hot/numeric columns built below, regardless of what else is in
 # the source DataFrame):
 #   - nct_id: identifier, not a feature
 #   - target_velocity: the target, not a feature
+#   - duration_months: removed -- target_velocity is literally
+#     enrollment_count / duration_months by construction in bronze_to_silver.py,
+#     so keeping both enrollment_count and duration_months as predictors lets
+#     the model largely just learn to reconstruct the target's own formula
+#     rather than genuinely model recruitment dynamics
 
 FEATURES_COL = "features"
 
