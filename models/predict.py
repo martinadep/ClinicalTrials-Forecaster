@@ -28,9 +28,10 @@ ARTIFACT_PATH = os.path.join(ARTIFACTS_DIR, "velocity_pipeline")
 DEFAULTS_PATH = os.path.join(ARTIFACTS_DIR, "defaults.json")
 
 # Fields the caller must supply -- there's no sensible dataset-wide default for
-# what disease the trial treats or how big it is, so we fail fast with a clear
-# error rather than silently feeding None into Spark.
-REQUIRED_TRIAL_FIELDS = ["primary_purpose", "phase", "enrollment_count"]
+# what disease the trial treats, how big it is, or whether it's interventional
+# vs observational, so we fail fast with a clear error rather than silently
+# feeding None into Spark.
+REQUIRED_TRIAL_FIELDS = ["study_type", "primary_purpose", "phase", "enrollment_count"]
 
 _spark = None
 _model = None
@@ -114,6 +115,7 @@ def _build_candidate_row(resolved_trial_params, site):
     candidate's own avg_velocity (both from gold.site_history).
     """
     return {
+        "study_type": resolved_trial_params["study_type"],
         "primary_purpose": resolved_trial_params["primary_purpose"],
         "lead_sponsor_class": resolved_trial_params["lead_sponsor_class"],
         "sex": resolved_trial_params["sex"],
@@ -130,7 +132,7 @@ def _build_candidate_row(resolved_trial_params, site):
 def predict_ranking(trial_params: dict, candidate_sites: list):
     """Score each candidate site for the planned trial, return ranked (site, predicted_velocity).
 
-    trial_params required fields: primary_purpose, phase, enrollment_count.
+    trial_params required fields: study_type, primary_purpose, phase, enrollment_count.
     Optional: lead_sponsor_class, sex, num_conditions, duration_months, n_sites --
     see _resolve_trial_params for how missing values are filled in.
 

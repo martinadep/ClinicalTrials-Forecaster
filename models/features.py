@@ -9,7 +9,11 @@ columns or encodings.
 """
 
 # Low-cardinality categoricals -> StringIndexer + OneHotEncoder.
-CATEGORICAL_COLS = ["primary_purpose", "lead_sponsor_class", "sex", "phase"]
+# study_type was previously dropped (constant -- all INTERVENTIONAL per the
+# original EDA), but the silver_to_gold.py INTERVENTIONAL-only filter was since
+# removed upstream, so gold.trial_features now includes OBSERVATIONAL trials
+# too and study_type carries real signal -- added back as a feature.
+CATEGORICAL_COLS = ["primary_purpose", "lead_sponsor_class", "sex", "phase", "study_type"]
 
 # Numeric features, used as-is (tree models don't need scaling and are robust
 # to the outliers flagged in data_exploration/gold_profile.md, e.g. enrollment_count,
@@ -26,7 +30,6 @@ NUMERIC_COLS = ["enrollment_count", "n_sites", "num_conditions", "duration_month
 # from the one-hot/numeric columns built below, regardless of what else is in
 # the source DataFrame):
 #   - nct_id: identifier, not a feature
-#   - study_type: constant (all INTERVENTIONAL per the EDA), carries no signal
 #   - target_velocity: the target, not a feature
 
 FEATURES_COL = "features"
