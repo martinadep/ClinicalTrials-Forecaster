@@ -21,10 +21,16 @@ def load_metadata():
     conditions = pd.read_csv(os.path.join(DATA_DIR, "conditions.csv"))["condition"].tolist()
     study_types = pd.read_csv(os.path.join(DATA_DIR, "study_types.csv"))["study_type"].tolist()
     phases = pd.read_csv(os.path.join(DATA_DIR, "phases.csv"))["phase"].tolist()
-    return conditions, study_types, phases
+    
+    # Nuovi file reali integrati
+    # purposes = pd.read_csv(os.path.join(DATA_DIR, "purposes.csv"))["primary_purpose"].tolist()
+    sexes = pd.read_csv(os.path.join(DATA_DIR, "sexes.csv"))["sex"].tolist()
+    # sponsors = pd.read_csv(os.path.join(DATA_DIR, "sponsors.csv"))["lead_sponsor_class"].tolist()
+    
+    return conditions, study_types, phases, sexes
 
 try:
-    CONDITIONS, STUDY_TYPES, PHASES = load_metadata()
+    CONDITIONS, STUDY_TYPES, PHASES, SEXES = load_metadata()
 except Exception as e:
     st.error(f"Errore nel caricamento dei metadati da {DATA_DIR}. Assicurati di aver eseguito retrieve_data.py.")
     st.stop()
@@ -51,7 +57,6 @@ def predict_sites(selected_condition):
     real_count = int(condition_data.iloc[0]['count'])
     
     # Simulazione di siti associati (In produzione qui leggerai la tabella gold/silver dei siti geolocalizzati)
-    # Per ora creiamo una lista basata sul peso del count reale della patologia
     results = [
         {"Site": "Ospedale San Raffaele", "City": "Milan", "Country": "Italy", "Velocity": round(real_count * 0.05, 1), "lat": 45.5057, "lon": 9.2647},
         {"Site": "Policlinico Gemelli", "City": "Rome", "Country": "Italy", "Velocity": round(real_count * 0.04, 1), "lat": 41.9311, "lon": 12.4255},
@@ -73,13 +78,17 @@ study_type = st.sidebar.selectbox("Study type", STUDY_TYPES)
 
 phase = st.sidebar.selectbox("Phase", PHASES)
 
+sex = st.sidebar.selectbox("Sex (Eligibility)", SEXES)
+
+# sponsor_class = st.sidebar.selectbox("Lead sponsor class", SPONSORS)
+
 enrollment = st.sidebar.number_input(
     "Target enrollment (number of patients)", min_value=1, value=100,
 )
 
 st.sidebar.divider()
 
-# Liste di città e nazioni statiche o ricavabili dai tuoi futuri file dei siti
+# Liste di città e nazioni geografiche
 ALL_CITIES = ["Berlin", "Boston", "Milan", "Rome"]
 ALL_COUNTRIES = ["Germany", "Italy", "United States"]
 
@@ -102,7 +111,6 @@ if run:
     if condition is None or len(chosen) == 0:
         st.warning("Please select a condition and at least one candidate geographical filter in the sidebar.")
     else:
-        # Calcola i dati basandosi sulla condition reale selezionata
         predictions = predict_sites(condition)
         
         if not predictions:
