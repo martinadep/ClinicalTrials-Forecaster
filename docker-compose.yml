@@ -106,10 +106,12 @@ services:
         condition: service_healthy
     # Local mode (no separate master/worker cluster): the base image's pip is too old
     # to resolve manylinux wheels, so upgrade it, then install the DB/Kafka client
-    # libs the job needs (not bundled in the base image), then stay up so jobs can
-    # be triggered with `docker exec clinical_trial_spark spark-submit ...`.
+    # libs the ETL jobs need plus numpy/pandas (required by pyspark.ml for the
+    # models/train.py, models/predict.py Spark MLlib scripts; not bundled in the
+    # base image), then stay up so jobs can be triggered with
+    # `docker exec clinical_trial_spark spark-submit ...`.
     command: >
-      bash -c "pip3 install --upgrade pip && pip3 install --no-cache-dir psycopg2-binary==2.9.10 confluent-kafka==2.3.0 && tail -f /dev/null"
+      bash -c "pip3 install --upgrade pip && pip3 install --no-cache-dir psycopg2-binary==2.9.10 confluent-kafka==2.3.0 numpy pandas && tail -f /dev/null"
 
 volumes:
   postgres_data:

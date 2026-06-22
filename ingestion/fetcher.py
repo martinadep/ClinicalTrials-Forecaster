@@ -11,8 +11,8 @@ from shared.kafka import build_kafka_producer, produce_study_to_kafka
 API_BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
 RETRIES = 5
 SLEEP_RETRY = 2
-PAGE_SIZE = 1000  
-MAX_TRIALS = 15000  
+PAGE_SIZE = 1000
+MAX_TRIALS = 15000
 
 def fetch_clinical_trial(page_token=None, is_daily_run=False):
     params = {

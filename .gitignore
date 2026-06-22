@@ -7,3 +7,6 @@ __pycache__/
 
 sample_study_*
 dashboard/data
+
+saved_models/
+models/artifacts/
