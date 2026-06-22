@@ -24,7 +24,7 @@ CATEGORICAL_COLS = ["primary_purpose", "lead_sponsor_class", "sex", "phase", "st
 # which includes each trial's own velocity contribution. This will likely
 # dominate feature importance for that reason. A production version would
 # compute site stats using only trials completed before each trial's start_date.
-NUMERIC_COLS = ["enrollment_count", "n_sites", "num_conditions", "duration_months", "avg_site_exp", "avg_site_vel"]
+NUMERIC_COLS = ["enrollment_count", "n_sites", "duration_months", "avg_site_exp", "avg_site_vel"]
 
 # Deliberately NOT included (the assembled "features" vector only ever draws
 # from the one-hot/numeric columns built below, regardless of what else is in

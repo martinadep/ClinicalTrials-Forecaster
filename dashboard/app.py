@@ -1,6 +1,12 @@
-import os
+import os, sys
 import streamlit as st
 import pandas as pd
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+
+from models.predict import predict_ranking
 
 st.set_page_config(layout="wide")
 
@@ -8,7 +14,7 @@ st.title("Clinical Trial Site Recommender")
 
 st.write(
     "Describe a new clinical trial you are planning, and this dashboard returns a "
-    "ranked list of sites or regions most likely to recruit it quickly, measured "
+    "ranked list of sites or regions **predicted by our Spark ML Model** to recruit it quickly, measured "
     "as **recruitment velocity** (patients enrolled per month)."
 )
 
@@ -22,45 +28,47 @@ def load_metadata():
     sexes = pd.read_csv(os.path.join(DATA_DIR, "sexes.csv"))["sex"].tolist()
     countries = pd.read_csv(os.path.join(DATA_DIR, "countries.csv"))["country"].tolist()
     cities = pd.read_csv(os.path.join(DATA_DIR, "cities.csv"))["city"].tolist()
-    
-    return conditions, study_types, phases, sexes, countries, cities
+
+    site_history = pd.read_csv(os.path.join(DATA_DIR, "site_history.csv"))
+
+    return conditions, study_types, phases, sexes, countries, cities, site_history
 
 try:
-    CONDITIONS, STUDY_TYPES, PHASES, SEXES, ALL_COUNTRIES, ALL_CITIES = load_metadata()
+    CONDITIONS, STUDY_TYPES, PHASES, SEXES, ALL_COUNTRIES, ALL_CITIES, SITE_HISTORY_DF = load_metadata()
 except Exception as e:
-    st.error(f"Errore nel caricamento dei metadati da {DATA_DIR}. Assicurati di aver eseguito lo script di estrazione.")
+    st.error(f"Error while loading metadata from {DATA_DIR}. Check if they are present.")
     st.stop()
 
 
-def predict_sites(selected_condition):
-    """
-    Legge il file cond_count.csv. In questa fase, per i siti storici usiamo
-    le anagrafiche reali del gold layer proporzionate al volume del MeSH term.
-    """
-    cond_count_path = os.path.join(DATA_DIR, "cond_count.csv")
-    if not os.path.exists(cond_count_path):
-        return pd.DataFrame()
+# def predict_sites(selected_condition):
+#     """
+#     Legge il file cond_count.csv. In questa fase, per i siti storici usiamo
+#     le anagrafiche reali del gold layer proporzionate al volume del MeSH term.
+#     """
+#     cond_count_path = os.path.join(DATA_DIR, "cond_count.csv")
+#     if not os.path.exists(cond_count_path):
+#         return pd.DataFrame()
     
-    df_counts = pd.read_csv(cond_count_path)
-    condition_data = df_counts[df_counts['condition'] == selected_condition]
+#     df_counts = pd.read_csv(cond_count_path)
+#     condition_data = df_counts[df_counts['condition'] == selected_condition]
     
-    if condition_data.empty:
-        return pd.DataFrame()
+#     if condition_data.empty:
+#         return pd.DataFrame()
     
-    real_count = int(condition_data.iloc[0]['count'])
+#     real_count = int(condition_data.iloc[0]['count'])
     
-    base_results = []
-    for i, city in enumerate(ALL_CITIES[:10]): 
-        base_results.append({
-            "Site": f"Clinical Research Center - {city}",
-            "City": city,
-            "Country": ALL_COUNTRIES[i % len(ALL_COUNTRIES)],
-            "Velocity": round(max(0.1, real_count * (0.01 + (i * 0.005))), 2),
-            "lat": 40.0 + (i * 0.5), 
-            "lon": 10.0 + (i * 0.5)
-        })
+#     base_results = []
+#     for i, city in enumerate(ALL_CITIES[:10]): 
+#         base_results.append({
+#             "Site": f"Clinical Research Center - {city}",
+#             "City": city,
+#             "Country": ALL_COUNTRIES[i % len(ALL_COUNTRIES)],
+#             "Velocity": round(max(0.1, real_count * (0.01 + (i * 0.005))), 2),
+#             "lat": 40.0 + (i * 0.5), 
+#             "lon": 10.0 + (i * 0.5)
+#         })
         
-    return pd.DataFrame(base_results)
+#     return pd.DataFrame(base_results)
 
 
 st.sidebar.header("Trial details")
@@ -74,11 +82,15 @@ study_type = st.sidebar.selectbox("Study type", STUDY_TYPES)
 phase = st.sidebar.selectbox("Phase", PHASES)
 sex = st.sidebar.selectbox("Sex (Eligibility)", SEXES)
 
+enrollment = st.sidebar.number_input(
+    "Target enrollment (number of patients)", min_value=5, value=100,
+)
+
 st.sidebar.divider()
 
 selection_mode = st.sidebar.radio(
     "Select candidates by",
-    ["City", "Country"],
+    ["Country", "City"],
 )
 
 chosen = []
@@ -94,37 +106,72 @@ if run:
     if condition is None or len(chosen) == 0:
         st.warning("Please select a condition and at least one candidate geographical filter in the sidebar.")
     else:
-        ranking = predict_sites(condition)
+        # ranking = predict_sites(condition)
         
-        if ranking.empty:
-            st.error("No data available for the selected condition.")
+        if selection_mode == "City":
+            filtered_candidates = SITE_HISTORY_DF[SITE_HISTORY_DF["city"].isin(chosen)]
         else:
-            if selection_mode == "City":
-                ranking = ranking[ranking["City"].isin(chosen)]
-            else:
-                ranking = ranking[ranking["Country"].isin(chosen)]
+            filtered_candidates = SITE_HISTORY_DF[SITE_HISTORY_DF["country"].isin(chosen)]
+            
+        if filtered_candidates.empty:
+            st.warning("No historical sites found matching your geographical filter.")
+        else:
+            with st.spinner("Spark Engine is generating ML predictions..."):
+                trial_params = {
+                    "study_type": study_type,
+                    "primary_purpose": "TREATMENT",  # Inserisci un fallback coerente se non presente in UI
+                    "phase": phase,
+                    "enrollment_count": int(enrollment),
+                    "sex": sex,
+                    "num_conditions": 1  # Valore temporaneo in attesa dell'introduzione dei vettori MeSH nel modello
+                }
                 
-            if ranking.empty:
-                st.warning("No sites found matching your combined geographical filters.")
-            else:
-                ranking = ranking.sort_values("Velocity", ascending=False).reset_index(drop=True)
+                # Rinominiamo le colonne per adeguarle alle chiavi dizionario attese dal tuo script predict.py
+                candidates_list = filtered_candidates.rename(columns={
+                    "site": "facility_name",
+                    "city": "city",
+                    "country": "country"
+                }).to_dict(orient="records")
+                
+                try:
+                    # 3. Chiamata al tuo modello Spark MLlib reale
+                    ranked_results = predict_ranking(trial_params, candidates_list)
+                    
+                    if not ranked_results:
+                        st.error("No valid candidate sites with a historical background available to rank.")
+                    else:
+                        # 4. Ricostruiamo il dataframe ordinato per la visualizzazione
+                        output_rows = []
+                        for site_dict, pred_vel in ranked_results:
+                            output_rows.append({
+                                "Site": site_dict.get("facility_name"),
+                                "City": site_dict.get("city"),
+                                "Country": site_dict.get("country"),
+                                "Velocity": round(pred_vel, 4),
+                                "lat": site_dict.get("lat"),
+                                "lon": site_dict.get("lon")
+                            })
+                        
+                        ranking_df = pd.DataFrame(output_rows)
+                        
+                        # Visualizzazione Risultati
+                        st.header("Recommended sites")
+                        best = ranking_df.iloc[0]
+                        
+                        st.success(
+                            f"**Top recommendation: {best['Site']}** ({best['City']}, {best['Country']}) — "
+                            f"{best['Velocity']} predicted patients/month"
+                        )
 
-                st.header("Recommended sites")
-                st.write(f"Ranked by recruitment velocity metrics for **{condition}**:")
+                        st.dataframe(
+                            ranking_df[["Site", "City", "Country", "Velocity"]],
+                            use_container_width=True,
+                        )
 
-                best = ranking.iloc[0]
-                st.success(
-                    f"**Top recommendation: {best['Site']}** "
-                    f"({best['City']}, {best['Country']}) — "
-                    f"{best['Velocity']} estimated patients/month"
-                )
+                        st.subheader("Site locations")
+                        st.map(ranking_df[["lat", "lon"]])
+                        
+                except Exception as ex:
+                    st.error(f"Prediction Engine Failure: {ex}")
 
-                st.dataframe(
-                    ranking[["Site", "City", "Country", "Velocity"]],
-                    use_container_width=True,
-                )
-
-                st.subheader("Site locations")
-                st.map(ranking[["lat", "lon"]])
-else:
-    st.info("← Fill in the trial details in the sidebar and click **Recommend sites**.")
+st.info("← Fill in the trial details in the sidebar and click **Recommend sites**.")

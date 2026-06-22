@@ -70,7 +70,7 @@ def compute_optional_field_defaults(train_df):
     return {
         "lead_sponsor_class": mode_of("lead_sponsor_class"),
         "sex": mode_of("sex"),
-        "num_conditions": median_of("num_conditions"),
+        # "num_conditions": median_of("num_conditions"),
         "duration_months": median_of("duration_months"),
     }
 

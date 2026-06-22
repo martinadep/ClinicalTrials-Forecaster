@@ -98,7 +98,7 @@ def _resolve_trial_params(trial_params, candidate_sites):
 
     defaults = _get_defaults()
     resolved = dict(trial_params)
-    for field in ["lead_sponsor_class", "sex", "num_conditions", "duration_months"]:
+    for field in ["lead_sponsor_class", "sex", "duration_months"]:
         if resolved.get(field) is None:
             resolved[field] = defaults[field]
     if resolved.get("n_sites") is None:
@@ -121,7 +121,7 @@ def _build_candidate_row(resolved_trial_params, site):
         "sex": resolved_trial_params["sex"],
         "phase": resolved_trial_params["phase"],
         "enrollment_count": resolved_trial_params["enrollment_count"],
-        "num_conditions": resolved_trial_params["num_conditions"],
+        # "num_conditions": resolved_trial_params["num_conditions"],
         "duration_months": resolved_trial_params["duration_months"],
         "n_sites": resolved_trial_params["n_sites"],
         "avg_site_exp": site.get("n_trials"),
