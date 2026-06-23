@@ -3,7 +3,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 from shared.config import load_dotenv
-from shared.db import build_jdbc_url_from_env 
+from shared.db import build_jdbc_url_from_env , truncate_tables
 
 def read_table(spark, jdbc_url, properties, dbtable):
     """Loads a database table via JDBC."""
@@ -76,19 +76,21 @@ def main():
         .withColumnRenamed("condition_id", "mesh_condition_id")
     )
     
+    print("[INFO]: Truncating historical Gold tables inside the DB...")
+    truncate_tables(["gold.site_history", "gold.site_conditions_history"]) 
+    
+    print("[INFO]: -> Writing historical records to gold.site_history...")
+    (site_history_df.write
+     .mode("append")
+     .jdbc(url=jdbc_url, table="gold.site_history", properties=jdbc_props))
+
+    
     print("[INFO]: -> Writing conditions mappings to gold.site_conditions_history...")
     (site_conditions_history_df.select(
         "country", "city", "zip", "mesh_condition_id", "n_trials_for_condition"
     ).write
-     .mode("overwrite")
-     .option("truncate", "true")
-     .jdbc(url=jdbc_url, table="gold.site_conditions_history", properties=jdbc_props)) 
-
-    print("[INFO]: -> Writing historical records to gold.site_history...")
-    (site_history_df.write
-     .mode("overwrite")
-     .option("truncate", "true")
-     .jdbc(url=jdbc_url, table="gold.site_history", properties=jdbc_props))
+     .mode("append")
+     .jdbc(url=jdbc_url, table="gold.site_conditions_history", properties=jdbc_props))
 
     n_sites_df = sites_df.groupBy("nct_id").agg(F.count("*").alias("n_sites"))
 
