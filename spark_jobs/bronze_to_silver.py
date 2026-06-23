@@ -1,12 +1,12 @@
 import os
+import re
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, coalesce, explode, row_number, lit, expr, round, datediff, to_date, from_json, regexp_replace, split
 from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, ArrayType, BooleanType
 from pyspark.sql.window import Window
 
 from shared.config import load_dotenv
-# Imported from your colleague's additions to preserve custom business logic
-from shared.conditions import has_non_diagnostic_condition 
+from shared.conditions import NON_DIAGNOSTIC_TERMS
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC_BRONZE = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
@@ -84,7 +84,8 @@ JSON_SCHEMA = StructType([
 
 def main():
     load_dotenv()
-    
+    print("[START]: Initializing Spark Session for Bronze -> Silver...")
+
     # Spark Local Optimization
     spark = SparkSession.builder \
         .appName("bronze_to_silver_native") \
@@ -93,6 +94,7 @@ def main():
     
     spark.sparkContext.setLogLevel("ERROR")
 
+    print(f"[INFO]: Reading raw data from Kafka topic: {TOPIC_BRONZE}...")
     raw_df = (
         spark.read.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
@@ -112,7 +114,6 @@ def main():
 
     window_spec = Window.partitionBy("nct_id").orderBy(col("kafka_ts").desc())
     
-    # MERGED SELECT: Extracting base fields + the raw conditions array
     deduped_df = parsed_df.select(
         proto.identificationModule.nctId.alias("nct_id"),
         proto.identificationModule.briefTitle.alias("brief_title"),
@@ -128,7 +129,7 @@ def main():
         proto.eligibilityModule.sex.alias("sex"),
         proto.eligibilityModule.minimumAge.alias("minimum_age_raw"),
         proto.eligibilityModule.maximumAge.alias("maximum_raw"),
-        proto.conditionsModule.conditions.alias("raw_conditions"), # Colleague's field source
+        proto.conditionsModule.conditions.alias("raw_conditions"), 
         proto.contactsLocationsModule.locations.alias("locations"),
         derived.conditionBrowseModule.meshes.alias("meshes_struct"),
         col("kafka_ts")
@@ -136,7 +137,6 @@ def main():
      .filter(col("row_num") == 1) \
      .drop("row_num")
 
-    # Native Date Conversions (Executed once)
     trials_raw_dates = deduped_df.withColumn(
         "start_date",
         to_date(expr("""
@@ -177,7 +177,7 @@ def main():
                 ELSE cast(regexp_replace({col_name}, '[^0-9.]', '') as double)
             END
         """)
-
+    
     trials_df = trials_filtered.withColumn("minimum_age_years", parse_age_column("minimum_age_raw")) \
                                .withColumn("maximum_age_years", parse_age_column("maximum_raw"))
 
@@ -189,15 +189,24 @@ def main():
         round(col("enrollment_count") / col("enrollment_duration_months"), 4)
     ).filter(col("trial_velocity") < 150.0)
 
-    # Apply colleague's external UDF logic cleanly via a Spark expression wrapper if needed, 
-    # or leverage a basic UDF registration for python compliance.
-    from pyspark.sql.functions import udf
-    check_diagnostic_udf = udf(lambda arr: bool(has_non_diagnostic_condition(arr if arr else [])), BooleanType())
-    
-    trials_df = trials_df.withColumn("has_non_diagnostic_condition", check_diagnostic_udf(col("raw_conditions")))
+    spark_regex = "(?i)(" + "|".join([re.escape(term) for term in NON_DIAGNOSTIC_TERMS]) + ")"
+
+    print("[INFO]: Structuring relational data...")
+    trials_df = trials_df.withColumn(
+    "has_non_diagnostic_condition",
+    expr(f"""
+        coalesce(
+            exists(raw_conditions, x -> x RLIKE '{spark_regex}'),
+            false
+        )
+        """)
+    )
+        
     trials_df = trials_df.withColumn("mesh_conditions_ids", expr("transform(meshes_struct, x -> x.id)")) \
-                         .withColumn("phase", coalesce(col("phase"), lit("UNKNOWN"))) \
-                         .withColumn("sex", coalesce(col("sex"), lit("ALL")))
+                     .withColumn("phase", coalesce(col("phase"), lit("UNKNOWN"))) \
+                     .withColumn("sex", coalesce(col("sex"), lit("ALL")))
+    
+    trials_df = trials_df.cache()
 
     # SITES DF
     sites_df = trials_df.filter(col("locations").isNotNull()) \
@@ -235,23 +244,25 @@ def main():
          .option("kafka.lingers.ms", "10")
          .save())
 
-    print("[INFO]: Streaming finalized dataframes to Kafka Silver/Gold tier topics...")
+    print(f"[INFO]: -> Evaluating and Publishing Silver Trials to {TOPIC_SILVER_TRIALS}...")
     write_to_kafka(
         trials_final.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value"), 
         TOPIC_SILVER_TRIALS
     )
 
+    print(f"[INFO]: -> Evaluating and Publishing Silver Sites to {TOPIC_SILVER_SITES}...")
     write_to_kafka(
         sites_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value"), 
         TOPIC_SILVER_SITES
     )
 
+    print(f"[INFO]: -> Evaluating and Publishing Mesh IDS and Names to {TOPIC_GOLD_MESH}...")
     write_to_kafka(
         mesh_df.selectExpr("cast(mesh_condition_id as string) as key", "to_json(struct(*)) as value"), 
         TOPIC_GOLD_MESH
     )
 
-    print(f"[INFO]: Spark Bronze -> Silver native pipeline completed successfully.")
+    print(f"### [SUCCESS]: SPARK Bronze -> Silver completed successfully.")
     spark.stop()
 
 if __name__ == "__main__":

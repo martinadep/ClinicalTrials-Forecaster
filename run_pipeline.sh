@@ -31,13 +31,17 @@ wait_for_consumer_group "clinical_trials_bronze_loader"
 # 2. Spark Bronze to Silver
 echo -e "\n====== [2/3] STARTING SPARK JOB: BRONZE TO SILVER ======"
 docker exec -it --user root clinical_trial_spark bash -c \
-  "cd /app && /opt/spark/bin/spark-submit --master local[*] --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3 spark_jobs/bronze_to_silver.py"
+"cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false \
+--conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR \
+--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3 spark_jobs/bronze_to_silver.py"
 wait_for_consumer_group "clinical_trials_silver_relational_loader"
 
 # 3. Spark Silver to Gold
 echo -e "\n====== [3/3] STARTING SPARK JOB: SILVER TO GOLD ======"
 docker exec -it --user root clinical_trial_spark bash -c \
-  "cd /app && /opt/spark/bin/spark-submit --master local[*] --packages org.postgresql:postgresql:42.7.3,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 spark_jobs/silver_to_gold.py"
+"cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false \
+--conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR \
+--packages org.postgresql:postgresql:42.7.3,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 spark_jobs/silver_to_gold.py"
 wait_for_consumer_group "clinical_trials_gold_features_loader"
 
 echo -e "\n=================================================="
