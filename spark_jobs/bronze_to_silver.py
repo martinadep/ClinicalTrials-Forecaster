@@ -163,7 +163,10 @@ def main():
         (datediff(col("primary_completion_date"), col("start_date")) > 0) & 
         (col("enrollment_count").isNotNull()) & (col("enrollment_count") > 0) &              
         (col("study_type").isNotNull()) & 
-        (coalesce(col("phase"), lit("UNKNOWN")) != "UNKNOWN")                                
+        (
+            (col("study_type") == "OBSERVATIONAL") | 
+            (coalesce(col("phase"), lit("UNKNOWN")) != "UNKNOWN")
+        )                               
     )
 
     def parse_age_column(col_name):

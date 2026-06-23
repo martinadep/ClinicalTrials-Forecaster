@@ -50,7 +50,7 @@ Wait-ConsumerGroup "clinical_trials_silver_relational_loader"
 
 # 3. Spark Silver to Gold
 Write-Host "`n====== [3/3] STARTING SPARK JOB: SILVER TO GOLD ======" -ForegroundColor Yellow
-docker exec -it --user root clinical_trial_spark bash -c \"cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR --packages org.postgresql:postgresql:42.7.3,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 spark_jobs/silver_to_gold.py"
+docker exec -it --user root clinical_trial_spark bash -c "cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR --packages org.postgresql:postgresql:42.7.3,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 spark_jobs/silver_to_gold.py"
 Wait-ConsumerGroup "clinical_trials_gold_features_loader"
 
 Write-Host "`n==================================================" -ForegroundColor Green
