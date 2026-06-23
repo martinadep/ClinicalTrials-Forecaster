@@ -23,6 +23,9 @@ os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
 os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from models.mesh_area_map import AREAS
+from shared.conditions import has_non_diagnostic_condition as _detect_non_diagnostic
+
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 ARTIFACT_PATH = os.path.join(ARTIFACTS_DIR, "velocity_pipeline")
 DEFAULTS_PATH = os.path.join(ARTIFACTS_DIR, "defaults.json")
@@ -83,14 +86,25 @@ def _get_defaults():
 def _resolve_trial_params(trial_params, candidate_sites):
     """Validate required fields and fill in optional ones.
 
-    lead_sponsor_class, sex, num_conditions are optional -- missing values fall
-    back to the training set's mode (categoricals) or median (numerics),
-    persisted in defaults.json by train.py.
+    lead_sponsor_class, sex are optional -- missing values fall back to the
+    training set's mode, persisted in defaults.json by train.py.
 
     n_sites is handled separately: it's the user's *planned* site count, so a
     dataset-wide default would be a poor proxy. If omitted, we fall back to
     len(candidate_sites) -- "however many candidates are being considered" is a
     more contextually grounded stand-in than a global median.
+
+    areas / has_non_diagnostic_condition -- inference-area contract (proposed,
+    to confirm with the dashboard/API owner): there are no MeSH ids for a trial
+    that hasn't run yet, so the area_* multi-hot columns can't be derived the
+    way they are at training time. Instead the caller supplies `areas` directly
+    -- a list of the same ~15 area keys in models.mesh_area_map.AREAS, presumably
+    offered as a multi-select in the dashboard UI. Missing/empty defaults to no
+    area selected (all area_* columns 0, area_other always 0 at inference --
+    "other" only means something relative to actual MeSH ids). Similarly,
+    has_non_diagnostic_condition can be passed directly as a bool, or derived
+    from a `conditions` list of raw free-text strings via the same shared
+    matcher silver_to_gold.py uses; defaults to False if neither is given.
     """
     missing_required = [f for f in REQUIRED_TRIAL_FIELDS if trial_params.get(f) is None]
     if missing_required:
@@ -98,11 +112,21 @@ def _resolve_trial_params(trial_params, candidate_sites):
 
     defaults = _get_defaults()
     resolved = dict(trial_params)
-    for field in ["lead_sponsor_class", "sex", "num_conditions"]:
+    for field in ["lead_sponsor_class", "sex"]:
         if resolved.get(field) is None:
             resolved[field] = defaults[field]
     if resolved.get("n_sites") is None:
         resolved["n_sites"] = len(candidate_sites)
+
+    selected_areas = set(resolved.get("areas") or [])
+    unknown_areas = selected_areas - set(AREAS)
+    if unknown_areas:
+        raise ValueError(f"trial_params['areas'] has unknown area(s): {sorted(unknown_areas)}")
+    resolved["areas"] = selected_areas
+
+    if resolved.get("has_non_diagnostic_condition") is None:
+        resolved["has_non_diagnostic_condition"] = _detect_non_diagnostic(resolved.get("conditions"))
+
     return resolved
 
 
@@ -114,26 +138,31 @@ def _build_candidate_row(resolved_trial_params, site):
     for this row avg_site_exp = the candidate's own n_trials and avg_site_vel = the
     candidate's own avg_velocity (both from gold.site_history).
     """
-    return {
+    row = {
         "study_type": resolved_trial_params["study_type"],
         "primary_purpose": resolved_trial_params["primary_purpose"],
         "lead_sponsor_class": resolved_trial_params["lead_sponsor_class"],
         "sex": resolved_trial_params["sex"],
         "phase": resolved_trial_params["phase"],
         "enrollment_count": resolved_trial_params["enrollment_count"],
-        "num_conditions": resolved_trial_params["num_conditions"],
         "n_sites": resolved_trial_params["n_sites"],
         "avg_site_exp": site.get("n_trials"),
         "avg_site_vel": site.get("avg_velocity"),
+        "has_non_diagnostic_condition": int(bool(resolved_trial_params["has_non_diagnostic_condition"])),
+        "area_other": 0,
     }
+    selected_areas = resolved_trial_params["areas"]
+    for area in AREAS:
+        row[f"area_{area}"] = 1 if area in selected_areas else 0
+    return row
 
 
 def predict_ranking(trial_params: dict, candidate_sites: list):
     """Score each candidate site for the planned trial, return ranked (site, predicted_velocity).
 
     trial_params required fields: study_type, primary_purpose, phase, enrollment_count.
-    Optional: lead_sponsor_class, sex, num_conditions, n_sites -- see
-    _resolve_trial_params for how missing values are filled in.
+    Optional: lead_sponsor_class, sex, n_sites, areas, has_non_diagnostic_condition
+    (or conditions) -- see _resolve_trial_params for how missing values are filled in.
 
     candidate_sites: pre-fetched gold.site_history rows (dicts with at least
     n_trials/avg_velocity, plus whatever identifying fields the caller wants

@@ -41,8 +41,9 @@ def upsert_trial_features_partition(rows):
                     """
                     INSERT INTO gold.trial_features (
                         nct_id, study_type, primary_purpose, lead_sponsor_class, sex,
-                        phase, enrollment_count, n_sites, duration_months, 
-                        mesh_conditions_ids, avg_site_exp, avg_site_vel, target_velocity
+                        phase, enrollment_count, n_sites, duration_months,
+                        mesh_conditions_ids, has_non_diagnostic_condition,
+                        avg_site_exp, avg_site_vel, target_velocity
                     ) VALUES %s
                     ON CONFLICT (nct_id) DO UPDATE SET
                         study_type = EXCLUDED.study_type,
@@ -54,6 +55,7 @@ def upsert_trial_features_partition(rows):
                         n_sites = EXCLUDED.n_sites,
                         duration_months = EXCLUDED.duration_months,
                         mesh_conditions_ids = EXCLUDED.mesh_conditions_ids,
+                        has_non_diagnostic_condition = EXCLUDED.has_non_diagnostic_condition,
                         avg_site_exp = EXCLUDED.avg_site_exp,
                         avg_site_vel = EXCLUDED.avg_site_vel,
                         target_velocity = EXCLUDED.target_velocity
@@ -62,11 +64,12 @@ def upsert_trial_features_partition(rows):
                         (
                             r.nct_id, r.study_type, r.primary_purpose, r.lead_sponsor_class, r.sex,
                             r.phase, r.enrollment_count, r.n_sites, r.duration_months,
-                            r.mesh_conditions_ids, r.avg_site_exp, r.avg_site_vel, r.target_velocity,
+                            r.mesh_conditions_ids, r.has_non_diagnostic_condition,
+                            r.avg_site_exp, r.avg_site_vel, r.target_velocity,
                         )
                         for r in rows
                     ],
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 )
     finally:
         conn.close()
@@ -167,7 +170,8 @@ def main():
     raw_features_df = (
         trials_df.select(
             "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex", "phase",
-            "enrollment_count", "enrollment_duration_months", "trial_velocity", "mesh_conditions_ids"
+            "enrollment_count", "enrollment_duration_months", "trial_velocity",
+            "mesh_conditions_ids", "has_non_diagnostic_condition"
         )
         .withColumnRenamed("enrollment_duration_months", "duration_months")
         .withColumnRenamed("trial_velocity", "target_velocity")
@@ -184,8 +188,9 @@ def main():
         (F.col("avg_site_vel").isNotNull())
     ).select(
         "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex",
-        "phase", "enrollment_count", "n_sites", "duration_months", 
-        "mesh_conditions_ids", "avg_site_exp", "avg_site_vel", "target_velocity"
+        "phase", "enrollment_count", "n_sites", "duration_months",
+        "mesh_conditions_ids", "has_non_diagnostic_condition",
+        "avg_site_exp", "avg_site_vel", "target_velocity"
     )
 
     trial_features_rows_written = trial_features_df.count()

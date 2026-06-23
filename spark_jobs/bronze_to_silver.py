@@ -7,6 +7,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
 from pyspark.sql.types import (
     ArrayType,
+    BooleanType,
     DoubleType,
     IntegerType,
     StringType,
@@ -15,6 +16,7 @@ from pyspark.sql.types import (
 )
 
 from shared.config import load_dotenv
+from shared.conditions import has_non_diagnostic_condition
 from shared.db import build_dsn_from_env
 from shared.kafka import build_kafka_producer
 from shared.transforms import normalize_date, parse_age_to_years
@@ -39,8 +41,9 @@ TRIALS_SCHEMA = StructType([
     StructField("maximum_age_years", DoubleType()),
     StructField("enrollment_duration_months", DoubleType()),
     StructField("trial_velocity", DoubleType()),
-    StructField("phase", StringType()), 
-    StructField("mesh_conditions_ids", ArrayType(StringType()))
+    StructField("phase", StringType()),
+    StructField("mesh_conditions_ids", ArrayType(StringType())),
+    StructField("has_non_diagnostic_condition", BooleanType()),
 ])
 
 SITES_SCHEMA = StructType([
@@ -110,10 +113,15 @@ def parse_study(json_str, kafka_ts):
     enrollment_count = int(enrollment.get("count") or 0)
     duration_months = _duration_months(start_date, primary_completion_date)
 
+    conditions_module = protocol.get("conditionsModule", {})
+    raw_conditions = conditions_module.get("conditions") or []
+    if not isinstance(raw_conditions, list):
+        raw_conditions = []
+
     derived = study.get("derivedSection", {})
     cond_browse = derived.get("conditionBrowseModule", {})
-    
-    mesh_terms = cond_browse.get("meshes") 
+
+    mesh_terms = cond_browse.get("meshes")
     
     if isinstance(mesh_terms, str):
         try:
@@ -155,7 +163,8 @@ def parse_study(json_str, kafka_ts):
         "phase": (
             lambda p: "UNKNOWN" if p in ["NA", "UNKNOWN"] else p
         )((design.get("phases", ["UNKNOWN"])[0] if design.get("phases") else "UNKNOWN").upper()),
-        "mesh_conditions_ids": mesh_ids
+        "mesh_conditions_ids": mesh_ids,
+        "has_non_diagnostic_condition": bool(has_non_diagnostic_condition(raw_conditions)),
     }
 
     sites = [
@@ -199,8 +208,9 @@ def upsert_trials_partition(rows):
                     INSERT INTO silver.trials (
                         nct_id, brief_title, brief_summary, study_type, primary_purpose,
                         overall_status, lead_sponsor_class, enrollment_count, start_date,
-                        primary_completion_date, sex, minimum_age_years, maximum_age_years, 
-                        enrollment_duration_months, trial_velocity, phase, mesh_conditions_ids, transformed_at
+                        primary_completion_date, sex, minimum_age_years, maximum_age_years,
+                        enrollment_duration_months, trial_velocity, phase, mesh_conditions_ids,
+                        has_non_diagnostic_condition, transformed_at
                     ) VALUES %s
                     ON CONFLICT (nct_id) DO UPDATE SET
                         brief_title = EXCLUDED.brief_title,
@@ -219,18 +229,20 @@ def upsert_trials_partition(rows):
                         trial_velocity = EXCLUDED.trial_velocity,
                         phase = EXCLUDED.phase,
                         mesh_conditions_ids = EXCLUDED.mesh_conditions_ids,
+                        has_non_diagnostic_condition = EXCLUDED.has_non_diagnostic_condition,
                         transformed_at = EXCLUDED.transformed_at
                     """,
                     [
                         (
                             r.nct_id, r.brief_title, r.brief_summary, r.study_type, r.primary_purpose,
                             r.overall_status, r.lead_sponsor_class, r.enrollment_count, r.start_date,
-                            r.primary_completion_date, r.sex, r.minimum_age_years, r.maximum_age_years, 
-                            r.enrollment_duration_months, r.trial_velocity, r.phase, r.mesh_conditions_ids
+                            r.primary_completion_date, r.sex, r.minimum_age_years, r.maximum_age_years,
+                            r.enrollment_duration_months, r.trial_velocity, r.phase, r.mesh_conditions_ids,
+                            r.has_non_diagnostic_condition
                         )
                         for r in rows
                     ],
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
+                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())",
                 )
     finally:
         conn.close()

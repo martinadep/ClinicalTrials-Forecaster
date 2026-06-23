@@ -32,7 +32,7 @@ from pyspark.ml.regression import GBTRegressor
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
-from models.features import build_feature_stages, FEATURES_COL
+from models.features import add_area_multihot_columns, build_feature_stages, FEATURES_COL
 
 ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), "artifacts")
 ARTIFACT_PATH = os.path.join(ARTIFACTS_DIR, "velocity_pipeline")
@@ -70,7 +70,6 @@ def compute_optional_field_defaults(train_df):
     return {
         "lead_sponsor_class": mode_of("lead_sponsor_class"),
         "sex": mode_of("sex"),
-        "num_conditions": median_of("num_conditions"),
     }
 
 
@@ -108,6 +107,12 @@ def main():
     jdbc_url, jdbc_props = build_jdbc_url_from_env()
     df = spark.read.jdbc(url=jdbc_url, table="gold.trial_features", properties=jdbc_props)
     loaded_count = df.count()
+
+    df = df.withColumn(
+        "has_non_diagnostic_condition",
+        F.coalesce(F.col("has_non_diagnostic_condition").cast("int"), F.lit(0)),
+    )
+    df = add_area_multihot_columns(df)
 
     df = df.filter(F.col(TARGET_COL).isNotNull())
     dropped_count = loaded_count - df.count()
