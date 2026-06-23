@@ -16,20 +16,22 @@ def main():
 
         query_mesh_counts = """
             SELECT 
-                dm.mesh_condition_name AS condition,
+                dm.mesh_condition_id AS condition_id,
+                dm.mesh_condition_name AS condition_name,
                 SUM(sch.n_trials_for_condition)::INTEGER AS count
             FROM gold.site_conditions_history sch
             INNER JOIN gold.dim_mesh_conditions dm 
-               ON sch.mesh_condition_id = dm.mesh_condition_id
-            GROUP BY dm.mesh_condition_name
+                ON sch.mesh_condition_id = dm.mesh_condition_id
+            GROUP BY dm.mesh_condition_id, dm.mesh_condition_name
             ORDER BY count DESC;
         """
-        conditions_count = pd.read_sql_query(query_mesh_counts, conn)
-        conditions_count = conditions_count[conditions_count['count'] >= 30]
-        conditions = conditions_count['condition'].unique()
-        pd.DataFrame({'condition': sorted(conditions)}).to_csv('dashboard/data/conditions.csv', index=False)
-        conditions_count.to_csv('dashboard/data/cond_count.csv', index=False)
+        conditions_df = pd.read_sql_query(query_mesh_counts, conn)
         
+        conditions_clean = conditions_df[['condition_id', 'condition_name']].drop_duplicates()
+        conditions_clean = conditions_clean.sort_values(by='condition_name')
+        
+        conditions_clean.to_csv('dashboard/data/conditions.csv', index=False)
+        conditions_df.to_csv('dashboard/data/cond_count.csv', index=False)
 
         query_params_gold = """
             SELECT DISTINCT study_type, primary_purpose, lead_sponsor_class, sex, phase

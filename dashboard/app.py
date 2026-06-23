@@ -22,7 +22,8 @@ DATA_DIR = "dashboard/data"
 
 @st.cache_data
 def load_metadata():
-    conditions = pd.read_csv(os.path.join(DATA_DIR, "conditions.csv"))["condition"].tolist()
+    conditions_df = pd.read_csv(os.path.join(DATA_DIR, "conditions.csv"))
+    
     study_types = pd.read_csv(os.path.join(DATA_DIR, "study_types.csv"))["study_type"].tolist()
     phases = pd.read_csv(os.path.join(DATA_DIR, "phases.csv"))["phase"].tolist()
     sexes = pd.read_csv(os.path.join(DATA_DIR, "sexes.csv"))["sex"].tolist()
@@ -31,10 +32,10 @@ def load_metadata():
 
     site_history = pd.read_csv(os.path.join(DATA_DIR, "site_history.csv"))
 
-    return conditions, study_types, phases, sexes, countries, cities, site_history
+    return conditions_df, study_types, phases, sexes, countries, cities, site_history
 
 try:
-    CONDITIONS, STUDY_TYPES, PHASES, SEXES, ALL_COUNTRIES, ALL_CITIES, SITE_HISTORY_DF = load_metadata()
+    CONDITIONS_DF, STUDY_TYPES, PHASES, SEXES, ALL_COUNTRIES, ALL_CITIES, SITE_HISTORY_DF = load_metadata()
 except Exception as e:
     st.error(f"Error while loading metadata from {DATA_DIR}. Check if they are present.")
     st.stop()
@@ -42,10 +43,15 @@ except Exception as e:
 
 st.sidebar.header("Trial details")
 
-condition = st.sidebar.selectbox(
-    "Medical condition", options=CONDITIONS,
+condition_names = CONDITIONS_DF["condition_name"].tolist()
+condition_map = dict(zip(CONDITIONS_DF["condition_name"], CONDITIONS_DF["condition_id"]))
+
+chosen_condition_name = st.sidebar.selectbox(
+    "Medical condition", options=condition_names,
     index=None, placeholder="Type to search a condition...",
 )
+
+condition_id = condition_map.get(chosen_condition_name) if chosen_condition_name else None
 
 study_type = st.sidebar.selectbox("Study type", STUDY_TYPES)
 phase = st.sidebar.selectbox("Phase", PHASES)
@@ -72,7 +78,7 @@ run = st.sidebar.button("Recommend sites")
 
 
 if run:
-    if condition is None or len(chosen) == 0:
+    if condition_id is None or len(chosen) == 0:
         st.warning("Please select a condition and at least one candidate geographical filter in the sidebar.")
     else:
         
@@ -87,11 +93,12 @@ if run:
             with st.spinner("Spark Engine is generating ML predictions..."):
                 trial_params = {
                     "study_type": study_type,
-                    "primary_purpose": "TREATMENT",  # Inserisci un fallback coerente se non presente in UI
+                    "primary_purpose": "TREATMENT", 
                     "phase": phase,
                     "enrollment_count": int(enrollment),
                     "sex": sex,
-                    "num_conditions": 1  # Valore temporaneo in attesa dell'introduzione dei vettori MeSH nel modello
+                    "conditions": [condition_id],
+                    "areas": []  
                 }
                 
                 candidates_list = filtered_candidates.rename(columns={
@@ -101,13 +108,12 @@ if run:
                 }).to_dict(orient="records")
                 
                 try:
-                    # 3. Chiamata al tuo modello Spark MLlib reale
+                    
                     ranked_results = predict_ranking(trial_params, candidates_list)
                     
                     if not ranked_results:
                         st.error("No valid candidate sites with a historical background available to rank.")
                     else:
-                        # 4. Ricostruiamo il dataframe ordinato per la visualizzazione
                         output_rows = []
                         for site_dict, pred_vel in ranked_results:
                             output_rows.append({
@@ -121,7 +127,6 @@ if run:
                         
                         ranking_df = pd.DataFrame(output_rows)
                         
-                        # Visualizzazione Risultati
                         st.header("Recommended sites")
                         best = ranking_df.iloc[0]
                         
