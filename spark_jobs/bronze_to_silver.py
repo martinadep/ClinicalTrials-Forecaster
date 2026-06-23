@@ -31,7 +31,7 @@ JSON_SCHEMA = StructType([
                 StructField("primaryPurpose", StringType())
             ])),
             StructField("enrollmentInfo", StructType([
-                StructField("count", IntegerType())  # <-- Cambiato in IntegerType perché nel JSON è un numero
+                StructField("count", IntegerType())
             ]))
         ])),
         StructField("statusModule", StructType([
@@ -45,7 +45,7 @@ JSON_SCHEMA = StructType([
         StructField("sponsorCollaboratorsModule", StructType([
             StructField("leadSponsor", StructType([
                 StructField("name", StringType()),
-                StructField("class", StringType())  # <-- Cambiato da 'type' a 'class'
+                StructField("class", StringType())
             ]))
         ])),
         StructField("eligibilityModule", StructType([
@@ -114,7 +114,6 @@ def main():
         proto.designModule.studyType.alias("study_type"),
         proto.designModule.designInfo.primaryPurpose.alias("primary_purpose"),
         proto.statusModule.overallStatus.alias("overall_status"),
-        # FIX: Estratto correttamente .class usando la notazione a stringa per evitare conflitti con parole riservate
         proto.sponsorCollaboratorsModule.leadSponsor.getItem("class").alias("lead_sponsor_class"),
         proto.designModule.phases[0].alias("phase"),
         proto.designModule.enrollmentInfo.count.alias("enrollment_count"),
@@ -132,9 +131,9 @@ def main():
 
     deduped_df.cache()
 
-    # --- 4. TRASFORMAZIONE E COSTRUZIONE TRIALS (SILVER) ---
+    # --- 4. TRASFORMAZIONE, FILTRI DI QUALITÀ E COSTRUZIONE TRIALS (SILVER) ---
     # Normalizzazione Date Parziali
-    trials_df = deduped_df.withColumn(
+    trials_raw_dates = deduped_df.withColumn(
         "start_date",
         expr("""
             CASE 
@@ -154,6 +153,16 @@ def main():
         """)
     )
 
+    # Applicazione dei filtri di consistenza logica sui dati core (Evita record spazzatura in Silver)
+    trials_filtered = trials_raw_dates.filter(
+        (col("start_date") != "1970-01-01") & 
+        (col("primary_completion_date") != "1970-01-01") &
+        (datediff(to_date(col("primary_completion_date")), to_date(col("start_date"))) > 0) & # Date coerenti
+        (col("enrollment_count").isNotNull()) & (col("enrollment_count") > 0) &              # Pazienti reali
+        (col("study_type").isNotNull()) & 
+        (coalesce(col("phase"), lit("UNKNOWN")) != "UNKNOWN")                                 # Fase nota per ML
+    )
+
     # Funzione di Parsing dell'età
     def parse_age_column(col_name):
         return expr(f"""
@@ -167,30 +176,21 @@ def main():
             END
         """)
 
-    trials_df = trials_df.withColumn("minimum_age_years", parse_age_column("minimum_age_raw")) \
-                         .withColumn("maximum_age_years", parse_age_column("maximum_age_raw"))
+    trials_df = trials_filtered.withColumn("minimum_age_years", parse_age_column("minimum_age_raw")) \
+                               .withColumn("maximum_age_years", parse_age_column("maximum_age_raw"))
 
-    # Calcoli di Velocity e Duration stabili
+    # Calcoli stabili di Duration e Velocity (I filtri a monte garantiscono la sicurezza matematica qui)
     trials_df = trials_df.withColumn(
         "enrollment_duration_months", 
-        round(
-            expr("""
-                CASE 
-                    WHEN start_date = '1970-01-01' OR primary_completion_date = '1970-01-01' THEN 0.0 
-                    WHEN datediff(to_date(primary_completion_date), to_date(start_date)) < 0 THEN 0.0 
-                    ELSE datediff(to_date(primary_completion_date), to_date(start_date)) / 30.44 
-                END
-            """), 2
-        )
-    )
-    
-    trials_df = trials_df.withColumn(
+        round(datediff(to_date(col("primary_completion_date")), to_date(col("start_date"))) / 30.44, 2)
+    ).withColumn(
         "trial_velocity",
-        round(
-            expr("CASE WHEN enrollment_count IS NULL OR enrollment_duration_months <= 0 THEN 0.0 ELSE enrollment_count / enrollment_duration_months END"), 4
-        )
+        round(col("enrollment_count") / col("enrollment_duration_months"), 4)
     )
     
+    # Ulteriore filtro di sicurezza per escludere outlier estremi di Velocity
+    trials_df = trials_df.filter(col("trial_velocity") < 150.0)
+
     trials_df = trials_df.withColumn("mesh_conditions_ids", expr("transform(meshes_struct, x -> x.id)"))
     trials_df = trials_df.withColumn("phase", coalesce(col("phase"), lit("UNKNOWN")))
     trials_df = trials_df.withColumn("sex", coalesce(col("sex"), lit("ALL")))
@@ -228,7 +228,7 @@ def main():
     mesh_df.selectExpr("cast(mesh_condition_id as string) as key", "to_json(struct(*)) as value") \
         .rdd.foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_GOLD_MESH))
 
-    print(f"[INFO]: Pipeline Spark Bronze -> Silver completata con successo in modo nativo.")
+    print(f"[INFO]: Pipeline Spark Bronze -> Silver completata con successo in modo nativo e filtrata.")
     spark.stop()
 
 if __name__ == "__main__":
