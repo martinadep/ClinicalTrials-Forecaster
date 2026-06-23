@@ -32,7 +32,7 @@ def save_trial_features(cur, records):
         INSERT INTO gold.trial_features (
             nct_id, study_type, primary_purpose, lead_sponsor_class, sex,
             phase, enrollment_count, n_sites, duration_months, 
-            mesh_conditions_ids, avg_site_exp, avg_site_vel, target_velocity
+            mesh_conditions_ids, has_non_diagnostic_condition, avg_site_exp, avg_site_vel, target_velocity
         ) VALUES %s
         ON CONFLICT (nct_id) DO UPDATE SET
             study_type = EXCLUDED.study_type,
@@ -44,6 +44,7 @@ def save_trial_features(cur, records):
             n_sites = EXCLUDED.n_sites,
             duration_months = EXCLUDED.duration_months,
             mesh_conditions_ids = EXCLUDED.mesh_conditions_ids,
+            has_non_diagnostic_condition = EXCLUDED.has_non_diagnostic_condition,
             avg_site_exp = EXCLUDED.avg_site_exp,
             avg_site_vel = EXCLUDED.avg_site_vel,
             target_velocity = EXCLUDED.target_velocity
@@ -52,13 +53,13 @@ def save_trial_features(cur, records):
             (
                 r.get("nct_id"), r.get("study_type"), r.get("primary_purpose"), r.get("lead_sponsor_class"), r.get("sex"),
                 r.get("phase"), r.get("enrollment_count"), r.get("n_sites"), r.get("duration_months"),
-                r.get("mesh_conditions_ids", []), r.get("avg_site_exp"), r.get("avg_site_vel"), r.get("target_velocity")
+                r.get("mesh_conditions_ids", []), r.get("has_non_diagnostic_condition"), r.get("avg_site_exp"), r.get("avg_site_vel"), r.get("target_velocity")
             )
             for r in records
         ],
-        template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+        template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
     )
-    print(f"[INFO DB]: Upsert completato per {len(records)} righe in gold.trial_features.")
+    print(f"[INFO DB - FEATURES]: Upsert completed for {len(records)} rows in gold.trial_features.")
 
 def flush_buffer(records):
     if not records:
@@ -78,7 +79,7 @@ def flush_buffer(records):
 def main():
     consumer = get_kafka_consumer()
     consumer.subscribe([TOPIC_GOLD_FEATURES])
-    print(f"[START]: Consumer GOLD active at: {TOPIC_GOLD_FEATURES}")
+    print(f"[START]: GOLD consumer active on topic: {TOPIC_GOLD_FEATURES}")
 
     BATCH_SIZE = 500
     TIMEOUT = 3.0
@@ -90,7 +91,7 @@ def main():
             
             if not messages:
                 if buffer:
-                    print(f"[TIMEOUT]: Svuotato buffer residuo delle feature ({len(buffer)} record).")
+                    print(f"[TIMEOUT]: Flushing remaining residual feature records ({len(buffer)} records)...")
                     flush_buffer(buffer)
                     consumer.commit(asynchronous=False)
                     buffer.clear()
@@ -115,18 +116,18 @@ def main():
                         buffer.append(actual_record)
                         
                 except Exception as parse_err:
-                    print(f"[ERR PARSING GOLD MSG]: Decodification Error: {parse_err}")
+                    print(f"[ERR PARSING GOLD MSG]: Decoding error encountered: {parse_err}")
 
             if buffer:
-                print(f"[BATCH]: Writing {len(buffer)} into DB...")
+                print(f"[BATCH]: Writing {len(buffer)} records into database...")
                 flush_buffer(buffer)
                 consumer.commit(asynchronous=False)
                 buffer.clear()
 
     except KeyboardInterrupt:
-        print("[STOP]: Consumer Gold interrupted by user.")
+        print("[STOP]: Gold consumer manually interrupted by user.")
     except Exception as e:
-        print(f"[CRITICAL ERR]: Consumer Gold crashed: {e}")
+        print(f"[CRITICAL ERR]: Gold consumer encountered a runtime crash: {e}")
         sys.exit(1)
     finally:
         consumer.close()

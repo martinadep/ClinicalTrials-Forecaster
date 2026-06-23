@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS gold.trial_features (
     n_sites                   INTEGER, 
     duration_months           NUMERIC,
     mesh_conditions_ids       TEXT[],
+    has_non_diagnostic_condition BOOLEAN,
     avg_site_exp              NUMERIC, 
     avg_site_vel              NUMERIC, 
     target_velocity           NUMERIC 

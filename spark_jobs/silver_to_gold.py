@@ -25,6 +25,7 @@ def main():
     
     spark.sparkContext.setLogLevel("ERROR") 
 
+    # Read trials and include the colleague's new field 'has_non_diagnostic_condition'
     trials_df = read_table(spark, jdbc_url, jdbc_props, "silver.trials") \
         .filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150)) \
         .cache()
@@ -38,10 +39,18 @@ def main():
         (F.upper(F.trim(F.col("facility_name"))) != "UNKNOWN FACILITY")
     ).cache()
 
+    # Metrics for reporting
+    total_trials = trials_df.count()
+    total_sites = sites_df.count()
+    null_velocity_count = trials_df.filter(F.col("trial_velocity").isNull()).count()
+
+    # Strict geographical filter for historical aggregations
     sites_with_geo_key = sites_df.filter(
         F.col("country").isNotNull() & F.col("city").isNotNull() & F.col("zip").isNotNull()
     )
+    skipped_sites_no_geo_key = total_sites - sites_with_geo_key.count()
     
+    # Explode conditions natively in Spark (Kept your efficient Spark implementation)
     exploded_conditions_df = sites_with_geo_key.filter(
         F.col("mesh_conditions_ids").isNotNull()
     ).withColumn("condition_id", F.explode(F.col("mesh_conditions_ids")))
@@ -75,7 +84,8 @@ def main():
         .withColumnRenamed("condition_id", "mesh_condition_id")
     )
 
-    print("[INFO]: Truncating historical tables...")
+    print("[INFO]: Truncating historical Gold tables...")
+    # Kept database truncation only for tables processed directly inside this job
     truncate_tables(["gold.site_conditions_history", "gold.site_history"])
     
     print("[INFO]: Writing to gold.site_history...")
@@ -86,6 +96,7 @@ def main():
         "country", "city", "zip", "mesh_condition_id", "n_trials_for_condition"
     ).write.jdbc(url=jdbc_url, table="gold.site_conditions_history", mode="append", properties=jdbc_props)
     
+    site_history_rows_written = site_history_df.count()
 
     n_sites_df = sites_df.groupBy("nct_id").agg(F.count("*").alias("n_sites"))
 
@@ -102,10 +113,12 @@ def main():
         )
     )
     
+    # Selecting features including the colleague's 'has_non_diagnostic_condition' column
     raw_features_df = (
         trials_df.select(
             "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex", "phase",
-            "enrollment_count", "enrollment_duration_months", "trial_velocity", "mesh_conditions_ids"
+            "enrollment_count", "enrollment_duration_months", "trial_velocity", 
+            "mesh_conditions_ids", "has_non_diagnostic_condition"
         )
         .withColumnRenamed("enrollment_duration_months", "duration_months")
         .withColumnRenamed("trial_velocity", "target_velocity")
@@ -114,6 +127,8 @@ def main():
         .withColumn("n_sites", F.coalesce(F.col("n_sites"), F.lit(0)))
     )
     
+    total_features_before_filter = raw_features_df.count()
+
     trial_features_df = raw_features_df.filter(
         (F.col("n_sites") > 0) & 
         (F.col("avg_site_exp").isNotNull()) & 
@@ -129,13 +144,17 @@ def main():
         F.col("n_sites").cast("int"),
         F.col("duration_months").cast("double"), 
         F.col("mesh_conditions_ids"),
+        F.col("has_non_diagnostic_condition").cast("boolean"), # Merged field preserved
         F.col("avg_site_exp").cast("double"),  
         F.col("avg_site_vel").cast("double"),  
         F.col("target_velocity").cast("double")
     )
 
+    trial_features_rows_written = trial_features_df.count()
+    removed_trials_count = total_features_before_filter - trial_features_rows_written
+
+    # --- SINGLE ACTION: OPTIMIZED NATIVE KAFKA STREAM SINK ---
     print("[INFO]: Sending transformed features to Kafka topic...")
-    
     (
         trial_features_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value")
         .write
@@ -148,6 +167,20 @@ def main():
         .save()
     )
     
+    # Comprehensive processing summary logs
+    print(
+        f"[INFO]: silver_to_gold pipeline logs: trials_read={total_trials} sites_read={total_sites} \n"
+        f"[INFO]: sites_skipped(no country/city/zip)={skipped_sites_no_geo_key} \n"
+        f"[INFO]: trials_with_null_velocity={null_velocity_count} \n"
+        f"[INFO]: site_history_written={site_history_rows_written} \n"
+        f"[INFO]: -------------------------------------------------------- \n"
+        f"[INFO]: FILTER REPORT FOR ML (gold.trial_features): \n"
+        f"[INFO]:   -> Total available trials: {total_features_before_filter} \n"
+        f"[INFO]:   -> DISCARDED: {removed_trials_count} \n"
+        f"[INFO]:   -> KEPT AND SHIPPED TO KAFKA: {trial_features_rows_written} "
+        f"({((trial_features_rows_written/total_features_before_filter)*100):.2f}% of total)"
+    )
+
     print("### [SUCCESS]: silver_to_gold pipeline completed successfully.")
     spark.stop()
 

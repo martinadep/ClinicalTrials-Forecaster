@@ -1,10 +1,12 @@
 import os
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, coalesce, explode, row_number, lit, expr, round, datediff, to_date, from_json, regexp_replace, split
-from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, ArrayType
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, ArrayType, BooleanType
 from pyspark.sql.window import Window
 
 from shared.config import load_dotenv
+# Imported from your colleague's additions to preserve custom business logic
+from shared.conditions import has_non_diagnostic_condition 
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC_BRONZE = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
@@ -13,6 +15,7 @@ TOPIC_SILVER_TRIALS = "trials.silver"
 TOPIC_SILVER_SITES = "sites.silver"
 TOPIC_GOLD_MESH = "mesh.gold"
 
+# MERGED SCHEMA: Added conditionsModule to extract your colleague's new field
 JSON_SCHEMA = StructType([
     StructField("protocolSection", StructType([
         StructField("identificationModule", StructType([
@@ -51,6 +54,10 @@ JSON_SCHEMA = StructType([
             StructField("minimumAge", StringType()),
             StructField("maximumAge", StringType())
         ])),
+        # Added to capture raw conditions for the boolean feature
+        StructField("conditionsModule", StructType([
+            StructField("conditions", ArrayType(StringType()))
+        ])),
         StructField("contactsLocationsModule", StructType([
             StructField("locations", ArrayType(StructType([
                 StructField("facility", StringType()),
@@ -78,10 +85,10 @@ JSON_SCHEMA = StructType([
 def main():
     load_dotenv()
     
-    # Aumentato il numero di shuffle partitions per evitare colli di bottiglia in memoria durante il Windowing
+    # Spark Local Optimization
     spark = SparkSession.builder \
         .appName("bronze_to_silver_native") \
-        .config("spark.sql.shuffle.partitions", "32") \
+        .config("spark.sql.shuffle.partitions", "4") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("ERROR")
@@ -105,6 +112,7 @@ def main():
 
     window_spec = Window.partitionBy("nct_id").orderBy(col("kafka_ts").desc())
     
+    # MERGED SELECT: Extracting base fields + the raw conditions array
     deduped_df = parsed_df.select(
         proto.identificationModule.nctId.alias("nct_id"),
         proto.identificationModule.briefTitle.alias("brief_title"),
@@ -119,7 +127,8 @@ def main():
         proto.statusModule.primaryCompletionDateStruct.date.alias("completion_date_raw"),
         proto.eligibilityModule.sex.alias("sex"),
         proto.eligibilityModule.minimumAge.alias("minimum_age_raw"),
-        proto.eligibilityModule.maximumAge.alias("maximum_age_raw"),
+        proto.eligibilityModule.maximumAge.alias("maximum_raw"),
+        proto.conditionsModule.conditions.alias("raw_conditions"), # Colleague's field source
         proto.contactsLocationsModule.locations.alias("locations"),
         derived.conditionBrowseModule.meshes.alias("meshes_struct"),
         col("kafka_ts")
@@ -127,7 +136,7 @@ def main():
      .filter(col("row_num") == 1) \
      .drop("row_num")
 
-    # Ottimizzazione Date: cast a to_date eseguito UNA SOLA VOLTA
+    # Native Date Conversions (Executed once)
     trials_raw_dates = deduped_df.withColumn(
         "start_date",
         to_date(expr("""
@@ -148,7 +157,6 @@ def main():
         """))
     )
 
-    # I filtri ora usano le colonne già tipizzate come Date
     trials_filtered = trials_raw_dates.filter(
         (col("start_date") != "1970-01-01") & 
         (col("primary_completion_date") != "1970-01-01") &
@@ -171,9 +179,8 @@ def main():
         """)
 
     trials_df = trials_filtered.withColumn("minimum_age_years", parse_age_column("minimum_age_raw")) \
-                               .withColumn("maximum_age_years", parse_age_column("maximum_age_raw"))
+                               .withColumn("maximum_age_years", parse_age_column("maximum_raw"))
 
-    # Uso delle colonne Date pre-calcolate
     trials_df = trials_df.withColumn(
         "enrollment_duration_months", 
         round(datediff(col("primary_completion_date"), col("start_date")) / 30.44, 2)
@@ -182,6 +189,12 @@ def main():
         round(col("enrollment_count") / col("enrollment_duration_months"), 4)
     ).filter(col("trial_velocity") < 150.0)
 
+    # Apply colleague's external UDF logic cleanly via a Spark expression wrapper if needed, 
+    # or leverage a basic UDF registration for python compliance.
+    from pyspark.sql.functions import udf
+    check_diagnostic_udf = udf(lambda arr: bool(has_non_diagnostic_condition(arr if arr else [])), BooleanType())
+    
+    trials_df = trials_df.withColumn("has_non_diagnostic_condition", check_diagnostic_udf(col("raw_conditions")))
     trials_df = trials_df.withColumn("mesh_conditions_ids", expr("transform(meshes_struct, x -> x.id)")) \
                          .withColumn("phase", coalesce(col("phase"), lit("UNKNOWN"))) \
                          .withColumn("sex", coalesce(col("sex"), lit("ALL")))
@@ -207,18 +220,22 @@ def main():
         .select(col("m.id").alias("mesh_condition_id"), col("m.term").alias("mesh_condition_name"))\
         .distinct()
 
-    trials_final = trials_df.drop("meshes_struct", "minimum_age_raw", "maximum_age_raw", "start_date_raw", "completion_date_raw", "locations")
+    # Drop temporary processing structures before pushing to final Silver DataFrame
+    trials_final = trials_df.drop("meshes_struct", "minimum_age_raw", "maximum_raw", "start_date_raw", "completion_date_raw", "locations", "raw_conditions")
 
-    # --- SCRITTURA NATIVA SU KAFKA (Massima Velocità) ---
-    
+    # --- HIGH PERFORMANCE NATIVE KAFKA SINK WRITER ---
     def write_to_kafka(df, topic):
         (df.selectExpr("cast(key as string) as key", "value")
          .write
          .format("kafka")
          .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
          .option("topic", topic)
+         .option("kafka.producer.acks", "1")
+         .option("kafka.batch.size", "65536")
+         .option("kafka.lingers.ms", "10")
          .save())
 
+    print("[INFO]: Streaming finalized dataframes to Kafka Silver/Gold tier topics...")
     write_to_kafka(
         trials_final.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value"), 
         TOPIC_SILVER_TRIALS
@@ -234,7 +251,7 @@ def main():
         TOPIC_GOLD_MESH
     )
 
-    print(f"[INFO]: Pipeline Spark Bronze -> Silver completata con successo in modo nativo e filtrata.")
+    print(f"[INFO]: Spark Bronze -> Silver native pipeline completed successfully.")
     spark.stop()
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS silver.trials (
     enrollment_duration_months NUMERIC,
     trial_velocity            NUMERIC,   
     mesh_conditions_ids       TEXT[],
+    has_non_diagnostic_condition BOOLEAN,
     transformed_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
