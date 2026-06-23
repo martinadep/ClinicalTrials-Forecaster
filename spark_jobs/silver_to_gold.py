@@ -6,20 +6,21 @@ from pyspark.sql import functions as F
 
 from shared.config import load_dotenv
 from shared.db import build_jdbc_url_from_env, truncate_tables
-from shared.kafka import produce_silver_partition_to_kafka 
 
 def read_table(spark, jdbc_url, properties, dbtable):
-    """Carica una tabella via JDBC."""
+    """Loads a database table via JDBC."""
     return spark.read.jdbc(url=jdbc_url, table=dbtable, properties=properties)
 
 def main():
     load_dotenv()
     jdbc_url, jdbc_props = build_jdbc_url_from_env()
     TOPIC_GOLD_FEATURES = os.getenv("KAFKA_TOPIC_GOLD_FEATURES", "trials.gold")
+    KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 
-    # Inizializzazione Spark Session
+    # Spark Session Initialization with Performance Optimization Parameters
     spark = SparkSession.builder \
         .appName("silver_to_gold") \
+        .config("spark.sql.shuffle.partitions", "4") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("ERROR") 
@@ -30,24 +31,22 @@ def main():
 
     raw_sites_df = read_table(spark, jdbc_url, jdbc_props, "silver.trial_sites")
     
-    # Filtro centralizzato per i siti validi
+    # Centralized filter for valid facilities
     sites_df = raw_sites_df.filter(
         F.col("facility_name").isNotNull() & 
         (F.trim(F.col("facility_name")) != "") &
         (F.upper(F.trim(F.col("facility_name"))) != "UNKNOWN FACILITY")
     ).cache()
 
-    # Filtro geografico stretto per le aggregazioni storiche
     sites_with_geo_key = sites_df.filter(
         F.col("country").isNotNull() & F.col("city").isNotNull() & F.col("zip").isNotNull()
     )
     
-    # Esplosione delle condizioni (Spostata da PostgreSQL a Spark per performance)
     exploded_conditions_df = sites_with_geo_key.filter(
         F.col("mesh_conditions_ids").isNotNull()
     ).withColumn("condition_id", F.explode(F.col("mesh_conditions_ids")))
     
-    # Join per associare la velocità del trial ai siti geografici
+    # Join to map trial velocity onto geographical sites
     sites_with_velocity = sites_with_geo_key.join(
         trials_df.select("nct_id", "trial_velocity", "start_date"), 
         on="nct_id", 
@@ -76,13 +75,13 @@ def main():
         .withColumnRenamed("condition_id", "mesh_condition_id")
     )
 
-    print("[INFO]: Tronco le tabelle storiche dei siti...")
+    print("[INFO]: Truncating historical tables...")
     truncate_tables(["gold.site_conditions_history", "gold.site_history"])
     
-    print("[INFO]: Scrittura di gold.site_history...")
+    print("[INFO]: Writing to gold.site_history...")
     site_history_df.write.jdbc(url=jdbc_url, table="gold.site_history", mode="append", properties=jdbc_props)
     
-    print("[INFO]: Scrittura di gold.site_conditions_history...")
+    print("[INFO]: Writing to gold.site_conditions_history...")
     site_conditions_history_df.select(
         "country", "city", "zip", "mesh_condition_id", "n_trials_for_condition"
     ).write.jdbc(url=jdbc_url, table="gold.site_conditions_history", mode="append", properties=jdbc_props)
@@ -135,12 +134,21 @@ def main():
         F.col("target_velocity").cast("double")
     )
 
-    print("[INFO]: Invio delle feature trasformate al topic Kafka...")
-    trial_features_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value") \
-        .rdd \
-        .foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, topic_name=TOPIC_GOLD_FEATURES))
+    print("[INFO]: Sending transformed features to Kafka topic...")
     
-    print("### [SUCCESS]: Pipeline silver_to_gold completata correttamente.")
+    (
+        trial_features_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value")
+        .write
+        .format("kafka")
+        .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
+        .option("topic", TOPIC_GOLD_FEATURES)
+        .option("kafka.producer.acks", "1")
+        .option("kafka.batch.size", "65536")
+        .option("kafka.lingers.ms", "10")
+        .save()
+    )
+    
+    print("### [SUCCESS]: silver_to_gold pipeline completed successfully.")
     spark.stop()
 
 if __name__ == "__main__":

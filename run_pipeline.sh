@@ -19,18 +19,27 @@ wait_for_consumer_group() {
   done
 }
 
-echo "====== [1/3] STARTING INGESTION (FETCHER) ======"
+echo "=================================================="
+echo "     RUNNING CLINICAL TRIALS PIPELINE (LINUX)     "
+echo "=================================================="
+
+# 1. Fetcher Ingestion
+echo -e "\n====== [1/3] STARTING INGESTION (FETCHER) ======"
 python -m ingestion.fetcher
 wait_for_consumer_group "clinical_trials_bronze_loader"
 
-echo "====== [2/3] STARTING SPARK JOB: BRONZE TO SILVER ======"
-docker exec --user root clinical_trial_spark bash -c \
+# 2. Spark Bronze to Silver
+echo -e "\n====== [2/3] STARTING SPARK JOB: BRONZE TO SILVER ======"
+docker exec -it --user root clinical_trial_spark bash -c \
   "cd /app && /opt/spark/bin/spark-submit --master local[*] --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3 spark_jobs/bronze_to_silver.py"
 wait_for_consumer_group "clinical_trials_silver_relational_loader"
 
-echo "====== [3/3] STARTING SPARK JOB: SILVER TO GOLD ======"
-docker exec --user root clinical_trial_spark bash -c \
-  "cd /app && /opt/spark/bin/spark-submit --master local[*] --packages org.postgresql:postgresql:42.7.3 spark_jobs/silver_to_gold.py"
+# 3. Spark Silver to Gold
+echo -e "\n====== [3/3] STARTING SPARK JOB: SILVER TO GOLD ======"
+docker exec -it --user root clinical_trial_spark bash -c \
+  "cd /app && /opt/spark/bin/spark-submit --master local[*] --packages org.postgresql:postgresql:42.7.3,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 spark_jobs/silver_to_gold.py"
 wait_for_consumer_group "clinical_trials_gold_features_loader"
 
-echo "====== [SUCCESS] Data Pipeline executed completely and successfully! ======"
+echo -e "\n=================================================="
+echo " [SUCCESS] Data Pipeline executed successfully!   "
+echo "=================================================="

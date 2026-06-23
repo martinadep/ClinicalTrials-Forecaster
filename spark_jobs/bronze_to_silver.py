@@ -5,16 +5,14 @@ from pyspark.sql.types import StructType, StructField, StringType, IntegerType, 
 from pyspark.sql.window import Window
 
 from shared.config import load_dotenv
-from shared.kafka import produce_silver_partition_to_kafka
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 TOPIC_BRONZE = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
 
 TOPIC_SILVER_TRIALS = "trials.silver"
 TOPIC_SILVER_SITES = "sites.silver"
-TOPIC_GOLD_MESH = "mesh.gold" 
+TOPIC_GOLD_MESH = "mesh.gold"
 
-# SCHEMA AGGIORNATO E CORRETTO SUL PAYLOAD REALE
 JSON_SCHEMA = StructType([
     StructField("protocolSection", StructType([
         StructField("identificationModule", StructType([
@@ -79,14 +77,15 @@ JSON_SCHEMA = StructType([
 
 def main():
     load_dotenv()
+    
+    # Aumentato il numero di shuffle partitions per evitare colli di bottiglia in memoria durante il Windowing
     spark = SparkSession.builder \
         .appName("bronze_to_silver_native") \
-        .config("spark.sql.shuffle.partitions", "4") \
+        .config("spark.sql.shuffle.partitions", "32") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("ERROR")
 
-    # 1. Lettura da Kafka Bronze
     raw_df = (
         spark.read.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
@@ -96,7 +95,6 @@ def main():
         .load()
     )
 
-    # 2. Parsing strutturato dell'intero JSON
     parsed_df = raw_df.select(
         col("timestamp").alias("kafka_ts"),
         from_json(col("value").cast("string"), JSON_SCHEMA).alias("data")
@@ -105,8 +103,8 @@ def main():
     proto = col("data.protocolSection")
     derived = col("data.derivedSection")
 
-    # 3. Deduplicazione nativa sulla Window
     window_spec = Window.partitionBy("nct_id").orderBy(col("kafka_ts").desc())
+    
     deduped_df = parsed_df.select(
         proto.identificationModule.nctId.alias("nct_id"),
         proto.identificationModule.briefTitle.alias("brief_title"),
@@ -129,41 +127,37 @@ def main():
      .filter(col("row_num") == 1) \
      .drop("row_num")
 
-    deduped_df.cache()
-
-    # --- 4. TRASFORMAZIONE, FILTRI DI QUALITÀ E COSTRUZIONE TRIALS (SILVER) ---
-    # Normalizzazione Date Parziali
+    # Ottimizzazione Date: cast a to_date eseguito UNA SOLA VOLTA
     trials_raw_dates = deduped_df.withColumn(
         "start_date",
-        expr("""
+        to_date(expr("""
             CASE 
                 WHEN length(start_date_raw) = 7 THEN concat(start_date_raw, '-01')
                 WHEN length(start_date_raw) = 4 THEN concat(start_date_raw, '-01-01')
                 ELSE coalesce(start_date_raw, '1970-01-01')
             END
-        """)
+        """))
     ).withColumn(
         "primary_completion_date",
-        expr("""
+        to_date(expr("""
             CASE 
                 WHEN length(completion_date_raw) = 7 THEN concat(completion_date_raw, '-01')
                 WHEN length(completion_date_raw) = 4 THEN concat(completion_date_raw, '-01-01')
                 ELSE coalesce(completion_date_raw, '1970-01-01')
             END
-        """)
+        """))
     )
 
-    # Applicazione dei filtri di consistenza logica sui dati core (Evita record spazzatura in Silver)
+    # I filtri ora usano le colonne già tipizzate come Date
     trials_filtered = trials_raw_dates.filter(
         (col("start_date") != "1970-01-01") & 
         (col("primary_completion_date") != "1970-01-01") &
-        (datediff(to_date(col("primary_completion_date")), to_date(col("start_date"))) > 0) & # Date coerenti
-        (col("enrollment_count").isNotNull()) & (col("enrollment_count") > 0) &              # Pazienti reali
+        (datediff(col("primary_completion_date"), col("start_date")) > 0) & 
+        (col("enrollment_count").isNotNull()) & (col("enrollment_count") > 0) &              
         (col("study_type").isNotNull()) & 
-        (coalesce(col("phase"), lit("UNKNOWN")) != "UNKNOWN")                                 # Fase nota per ML
+        (coalesce(col("phase"), lit("UNKNOWN")) != "UNKNOWN")                                
     )
 
-    # Funzione di Parsing dell'età
     def parse_age_column(col_name):
         return expr(f"""
             CASE 
@@ -179,23 +173,20 @@ def main():
     trials_df = trials_filtered.withColumn("minimum_age_years", parse_age_column("minimum_age_raw")) \
                                .withColumn("maximum_age_years", parse_age_column("maximum_age_raw"))
 
-    # Calcoli stabili di Duration e Velocity (I filtri a monte garantiscono la sicurezza matematica qui)
+    # Uso delle colonne Date pre-calcolate
     trials_df = trials_df.withColumn(
         "enrollment_duration_months", 
-        round(datediff(to_date(col("primary_completion_date")), to_date(col("start_date"))) / 30.44, 2)
+        round(datediff(col("primary_completion_date"), col("start_date")) / 30.44, 2)
     ).withColumn(
         "trial_velocity",
         round(col("enrollment_count") / col("enrollment_duration_months"), 4)
-    )
-    
-    # Ulteriore filtro di sicurezza per escludere outlier estremi di Velocity
-    trials_df = trials_df.filter(col("trial_velocity") < 150.0)
+    ).filter(col("trial_velocity") < 150.0)
 
-    trials_df = trials_df.withColumn("mesh_conditions_ids", expr("transform(meshes_struct, x -> x.id)"))
-    trials_df = trials_df.withColumn("phase", coalesce(col("phase"), lit("UNKNOWN")))
-    trials_df = trials_df.withColumn("sex", coalesce(col("sex"), lit("ALL")))
+    trials_df = trials_df.withColumn("mesh_conditions_ids", expr("transform(meshes_struct, x -> x.id)")) \
+                         .withColumn("phase", coalesce(col("phase"), lit("UNKNOWN"))) \
+                         .withColumn("sex", coalesce(col("sex"), lit("ALL")))
 
-    # --- 5. TRASFORMAZIONE E COSTRUZIONE SITES (SILVER) ---
+    # SITES DF
     sites_df = trials_df.filter(col("locations").isNotNull()) \
         .withColumn("loc", explode("locations")) \
         .select(
@@ -210,7 +201,7 @@ def main():
             col("mesh_conditions_ids")
         )
 
-    # --- 6. TRASFORMAZIONE E COSTRUZIONE MESH MAPPINGS (GOLD MESH) ---
+    # MESH DF
     mesh_df = trials_df.filter(col("meshes_struct").isNotNull())\
         .select(explode("meshes_struct").alias("m"))\
         .select(col("m.id").alias("mesh_condition_id"), col("m.term").alias("mesh_condition_name"))\
@@ -218,15 +209,30 @@ def main():
 
     trials_final = trials_df.drop("meshes_struct", "minimum_age_raw", "maximum_age_raw", "start_date_raw", "completion_date_raw", "locations")
 
-    # --- 7. SCRITTURA SU KAFKA ---
-    trials_final.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value") \
-        .rdd.foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_SILVER_TRIALS))
+    # --- SCRITTURA NATIVA SU KAFKA (Massima Velocità) ---
+    
+    def write_to_kafka(df, topic):
+        (df.selectExpr("cast(key as string) as key", "value")
+         .write
+         .format("kafka")
+         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
+         .option("topic", topic)
+         .save())
 
-    sites_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value") \
-        .rdd.foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_SILVER_SITES))
+    write_to_kafka(
+        trials_final.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value"), 
+        TOPIC_SILVER_TRIALS
+    )
 
-    mesh_df.selectExpr("cast(mesh_condition_id as string) as key", "to_json(struct(*)) as value") \
-        .rdd.foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_GOLD_MESH))
+    write_to_kafka(
+        sites_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value"), 
+        TOPIC_SILVER_SITES
+    )
+
+    write_to_kafka(
+        mesh_df.selectExpr("cast(mesh_condition_id as string) as key", "to_json(struct(*)) as value"), 
+        TOPIC_GOLD_MESH
+    )
 
     print(f"[INFO]: Pipeline Spark Bronze -> Silver completata con successo in modo nativo e filtrata.")
     spark.stop()
