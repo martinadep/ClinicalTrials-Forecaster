@@ -25,7 +25,7 @@ def main():
             ORDER BY count DESC;
         """
         conditions_count = pd.read_sql_query(query_mesh_counts, conn)
-        conditions_count = conditions_count[conditions_count['count'] >= 3]
+        conditions_count = conditions_count[conditions_count['count'] >= 30]
         conditions = conditions_count['condition'].unique()
         pd.DataFrame({'condition': sorted(conditions)}).to_csv('dashboard/data/conditions.csv', index=False)
         conditions_count.to_csv('dashboard/data/cond_count.csv', index=False)
@@ -36,11 +36,13 @@ def main():
             FROM gold.trial_features
         """
         df_params_gold = pd.read_sql_query(query_params_gold, conn)
-        study_types = df_params_gold['study_type'].unique()
-        purposes = df_params_gold['primary_purpose'].unique()
-        sponsors = df_params_gold['lead_sponsor_class'].unique()
-        sexes = df_params_gold['sex'].unique()
-        phases = df_params_gold['phase'].unique()        
+
+        study_types = df_params_gold['study_type'].dropna().unique()
+        purposes = df_params_gold['primary_purpose'].dropna().unique()
+        sponsors = df_params_gold['lead_sponsor_class'].dropna().unique()
+        sexes = df_params_gold['sex'].dropna().unique()
+        phases = df_params_gold['phase'].dropna().unique()        
+        
         pd.DataFrame({'study_type': sorted(study_types)}).to_csv('dashboard/data/study_types.csv', index=False)
         pd.DataFrame({'primary_purpose': sorted(purposes)}).to_csv('dashboard/data/purposes.csv', index=False)
         pd.DataFrame({'lead_sponsor_class': sorted(sponsors)}).to_csv('dashboard/data/sponsors.csv', index=False)
@@ -54,8 +56,14 @@ def main():
                 WHERE country IS NOT NULL AND city IS NOT NULL;
             """
         df_geo = pd.read_sql_query(query_geo, conn)
+        clean_cities = df_geo['city'].dropna()
+        
+        exclude_pattern = r"\d|^'s-|\(|\?"
+        clean_cities = clean_cities[~clean_cities.str.contains(exclude_pattern, regex=True, na=False)]
+        
         countries = df_geo['country'].dropna().unique()
-        cities = df_geo['city'].dropna().unique()
+        cities = clean_cities.unique()
+        
         pd.DataFrame({'country': sorted(countries)}).to_csv('dashboard/data/countries.csv', index=False)
         pd.DataFrame({'city': sorted(cities)}).to_csv('dashboard/data/cities.csv', index=False)
         
