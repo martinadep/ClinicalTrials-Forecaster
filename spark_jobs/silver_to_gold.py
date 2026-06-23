@@ -1,87 +1,27 @@
+import os
+import sys
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 from shared.config import load_dotenv
-from shared.db import build_dsn_from_env, build_jdbc_url_from_env
-
+from shared.db import build_jdbc_url_from_env, truncate_tables
+from shared.kafka import produce_silver_partition_to_kafka 
 
 def read_table(spark, jdbc_url, properties, dbtable):
     return spark.read.jdbc(url=jdbc_url, table=dbtable, properties=properties)
 
-
-def truncate_tables(table_names):
-    """Truncate gold tables before a full recompute."""
-    import psycopg2
-
-    dsn = build_dsn_from_env()
-    conn = psycopg2.connect(dsn)
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                cur.execute(f"TRUNCATE TABLE {', '.join(table_names)}")
-    finally:
-        conn.close()
-
-
-def upsert_trial_features_partition(rows):
-    """Upsert a partition of gold.trial_features rows, keyed by nct_id."""
-    import psycopg2
-    import psycopg2.extras
-
-    rows = list(rows)
-    if not rows:
-        return
-    dsn = build_dsn_from_env()
-    conn = psycopg2.connect(dsn)
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                psycopg2.extras.execute_values(
-                    cur,
-                    """
-                    INSERT INTO gold.trial_features (
-                        nct_id, study_type, primary_purpose, lead_sponsor_class, sex,
-                        phase, enrollment_count, n_sites, duration_months, 
-                        mesh_conditions_ids, avg_site_exp, avg_site_vel, target_velocity
-                    ) VALUES %s
-                    ON CONFLICT (nct_id) DO UPDATE SET
-                        study_type = EXCLUDED.study_type,
-                        primary_purpose = EXCLUDED.primary_purpose,
-                        lead_sponsor_class = EXCLUDED.lead_sponsor_class,
-                        sex = EXCLUDED.sex,
-                        phase = EXCLUDED.phase,
-                        enrollment_count = EXCLUDED.enrollment_count,
-                        n_sites = EXCLUDED.n_sites,
-                        duration_months = EXCLUDED.duration_months,
-                        mesh_conditions_ids = EXCLUDED.mesh_conditions_ids,
-                        avg_site_exp = EXCLUDED.avg_site_exp,
-                        avg_site_vel = EXCLUDED.avg_site_vel,
-                        target_velocity = EXCLUDED.target_velocity
-                    """,
-                    [
-                        (
-                            r.nct_id, r.study_type, r.primary_purpose, r.lead_sponsor_class, r.sex,
-                            r.phase, r.enrollment_count, r.n_sites, r.duration_months,
-                            r.mesh_conditions_ids, r.avg_site_exp, r.avg_site_vel, r.target_velocity,
-                        )
-                        for r in rows
-                    ],
-                    template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                )
-    finally:
-        conn.close()
-
-
 def main():
     load_dotenv()
     jdbc_url, jdbc_props = build_jdbc_url_from_env()
+    TOPIC_GOLD_FEATURES = os.getenv("KAFKA_TOPIC_GOLD_FEATURES", "trials.gold")
+
     spark = SparkSession.builder.appName("silver_to_gold").getOrCreate()
-    
     spark.sparkContext.setLogLevel("ERROR") 
 
+    # 1. Caricamento tabelle Silver
     trials_df = read_table(spark, jdbc_url, jdbc_props, "silver.trials").cache()
-    
     raw_sites_df = read_table(spark, jdbc_url, jdbc_props, "silver.trial_sites")
+    
     sites_df = raw_sites_df.filter(
         F.col("facility_name").isNotNull() & 
         (F.trim(F.col("facility_name")) != "") &
@@ -90,6 +30,7 @@ def main():
 
     trials_df = trials_df.filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150))
     
+    # Lettura ottimizzata delle condizioni esplose
     exploded_conditions_df = read_table(
         spark, jdbc_url, jdbc_props,
         """
@@ -103,24 +44,17 @@ def main():
         """,
     )
     
-    total_trials = trials_df.count()
-    total_sites = sites_df.count()
-
     sites_with_geo_key = sites_df.filter(
         F.col("country").isNotNull() & F.col("city").isNotNull() & F.col("zip").isNotNull()
     )
-    skipped_sites_no_geo_key = total_sites - sites_with_geo_key.count()
-
-    null_velocity_count = trials_df.filter(F.col("trial_velocity").isNull()).count()
-
+    
     sites_with_velocity = sites_with_geo_key.join(
         trials_df.select("nct_id", "trial_velocity", "start_date"), on="nct_id", how="left"
-    )
-    
-    sites_with_velocity = sites_with_velocity.withColumn(
+    ).withColumn(
         "trial_velocity", F.coalesce(F.col("trial_velocity"), F.lit(0.0))
     )
 
+    # 2. Calcolo aggregati Gold per i Siti
     site_history_df = (
         sites_with_velocity.groupBy("country", "city", "zip")
         .agg(
@@ -141,14 +75,19 @@ def main():
         .withColumnRenamed("condition_id", "mesh_condition_id")
     )
 
+    # Tronca e sovrascrive le tabelle storiche aggregate (Essendo tabelle analitiche di snapshot)
+    print("[INFO]: Tronco le tabelle storiche dei siti...")
     truncate_tables(["gold.site_conditions_history", "gold.site_history"])
+    
+    print("[INFO]: Scrittura di gold.site_history...")
     site_history_df.write.jdbc(url=jdbc_url, table="gold.site_history", mode="append", properties=jdbc_props)
+    
+    print("[INFO]: Scrittura di gold.site_conditions_history...")
     site_conditions_history_df.select(
         "country", "city", "zip", "mesh_condition_id", "n_trials_for_condition"
     ).write.jdbc(url=jdbc_url, table="gold.site_conditions_history", mode="append", properties=jdbc_props)
     
-    site_history_rows_written = site_history_df.count()
-    
+    # 3. Calcolo delle Feature dei Trial (Machine Learning Ready)
     n_sites_df = sites_df.groupBy("nct_id").agg(F.count("*").alias("n_sites"))
 
     site_stats_per_trial = (
@@ -175,39 +114,34 @@ def main():
         .join(site_stats_per_trial, on="nct_id", how="left")
         .withColumn("n_sites", F.coalesce(F.col("n_sites"), F.lit(0)))
     )
-
-    total_features_before_filter = raw_features_df.count()
-
+    
     trial_features_df = raw_features_df.filter(
         (F.col("n_sites") > 0) & 
         (F.col("avg_site_exp").isNotNull()) & 
         (F.col("avg_site_vel").isNotNull())
     ).select(
-        "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex",
-        "phase", "enrollment_count", "n_sites", "duration_months", 
-        "mesh_conditions_ids", "avg_site_exp", "avg_site_vel", "target_velocity"
+        F.col("nct_id"),
+        F.col("study_type"),
+        F.col("primary_purpose"),
+        F.col("lead_sponsor_class"),
+        F.col("sex"),
+        F.col("phase"),
+        F.col("enrollment_count").cast("int"),
+        F.col("n_sites").cast("int"),
+        F.col("duration_months").cast("double"), 
+        F.col("mesh_conditions_ids"),
+        F.col("avg_site_exp").cast("double"),  
+        F.col("avg_site_vel").cast("double"),  
+        F.col("target_velocity").cast("double")
     )
 
-    trial_features_rows_written = trial_features_df.count()
-    removed_trials_count = total_features_before_filter - trial_features_rows_written
-
-    trial_features_df.foreachPartition(upsert_trial_features_partition)
-
-    print(
-        f"[INFO]: silver_to_gold: trials_read={total_trials} sites_read={total_sites} \n"
-        f"[INFO]: sites_skipped(no country/city/zip)={skipped_sites_no_geo_key} \n"
-        f"[INFO]: trials_with_null_velocity={null_velocity_count} \n"
-        f"[INFO]: site_history_written={site_history_rows_written} \n"
-        f"[INFO]: -------------------------------------------------------- \n"
-        f"[INFO]: FILTER REPORT FOR ML (gold.trial_features): \n"
-        f"[INFO]:   -> Total available trials: {total_features_before_filter} \n"
-        f"[INFO]:   -> DISCARDED: {removed_trials_count} \n"
-        f"[INFO]:   -> KEPT: {trial_features_rows_written} "
-        f"({((trial_features_rows_written/total_features_before_filter)*100):.2f}% del totale)"
+    print(f"[INFO]: Invio feature trasformate al topic Kafka: {TOPIC_GOLD_FEATURES}")
+    trial_features_df.foreachPartition(
+        lambda rows: produce_silver_partition_to_kafka(rows, topic_name=TOPIC_GOLD_FEATURES)
     )
-
+    
+    print("### [SUCCESS]: Pipeline silver_to_gold completata correttamente.")
     spark.stop()
-
 
 if __name__ == "__main__":
     main()

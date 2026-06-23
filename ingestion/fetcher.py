@@ -5,7 +5,6 @@ import requests
 import datetime
 
 from shared.config import load_dotenv
-from shared.db import build_dsn_from_env, insert_study_into_db
 from shared.kafka import build_kafka_producer, produce_study_to_kafka
 
 API_BASE_URL = "https://clinicaltrials.gov/api/v2/studies"
@@ -48,12 +47,11 @@ def _write_study_to_file(study, fallback_id):
         f.write(json.dumps(study, indent=2))
 
 
-def process_page(study_list, dsn, producer=None):
+def process_page(study_list, producer=None):
     inserted = 0
     for idx, study in enumerate(study_list):
         try:
-            if dsn:
-                insert_study_into_db(study, dsn=dsn)
+            if producer:
                 produce_study_to_kafka(producer, study)
             else:
                 _write_study_to_file(study, idx)
@@ -69,15 +67,13 @@ def main():
     is_daily_run = os.getenv("RUN_MODE", "FULL").upper() == "DAILY"
 
     next_page_token = None
-    dsn = os.getenv("DATABASE_URL") or build_dsn_from_env()
     producer = build_kafka_producer()
 
-    if dsn:
-        print(f"[INFO]: Connected to Postgres Database. Starting ingestion...")
-    else:
-        # print("[INFO]: No database found. Writing to local JSON files.")
-        print("Could not connect to Postgres Database. Aborting.")
+    if producer is None:
+        print("[ERR]: Could not initialize Kafka Producer. Aborting fetcher.")
         return
+    else:
+        print("[INFO]: Kafka Producer initialized. Starting ingestion to trials.bronze...")
 
     page_counter = 1
     total_processed = 0
@@ -96,7 +92,7 @@ def main():
             print("[INFO]: No more trials to fetch.")
             break
 
-        inserted = process_page(study_list, dsn, producer=producer)
+        inserted = process_page(study_list, producer=producer)
         total_processed += inserted
         print(f"[INFO]: Page {page_counter} completed. Processed {len(study_list)} trials. Total progress: {total_processed}")
 

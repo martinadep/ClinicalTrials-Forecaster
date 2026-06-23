@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS silver.trials (
 
 CREATE TABLE IF NOT EXISTS silver.trial_sites (
     id                        SERIAL PRIMARY KEY,
-    nct_id                    TEXT REFERENCES silver.trials(nct_id) ON DELETE CASCADE,
+    nct_id                    TEXT,
     facility_name             TEXT,
     city                      TEXT,
     state                     TEXT,
@@ -34,7 +34,12 @@ CREATE TABLE IF NOT EXISTS silver.trial_sites (
     latitude                  NUMERIC,
     longitude                 NUMERIC,
     mesh_conditions_ids       TEXT[],
-    transformed_at            TIMESTAMPTZ DEFAULT NOW()
+    transformed_at            TIMESTAMPTZ DEFAULT NOW(),
+
+    CONSTRAINT trial_sites_nct_id_fkey 
+        FOREIGN KEY (nct_id) REFERENCES silver.trials(nct_id) 
+        ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX IF NOT EXISTS idx_silver_sites_geo ON silver.trial_sites(country, state, city, zip);

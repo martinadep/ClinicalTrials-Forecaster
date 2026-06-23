@@ -40,37 +40,6 @@ except Exception as e:
     st.stop()
 
 
-# def predict_sites(selected_condition):
-#     """
-#     Legge il file cond_count.csv. In questa fase, per i siti storici usiamo
-#     le anagrafiche reali del gold layer proporzionate al volume del MeSH term.
-#     """
-#     cond_count_path = os.path.join(DATA_DIR, "cond_count.csv")
-#     if not os.path.exists(cond_count_path):
-#         return pd.DataFrame()
-    
-#     df_counts = pd.read_csv(cond_count_path)
-#     condition_data = df_counts[df_counts['condition'] == selected_condition]
-    
-#     if condition_data.empty:
-#         return pd.DataFrame()
-    
-#     real_count = int(condition_data.iloc[0]['count'])
-    
-#     base_results = []
-#     for i, city in enumerate(ALL_CITIES[:10]): 
-#         base_results.append({
-#             "Site": f"Clinical Research Center - {city}",
-#             "City": city,
-#             "Country": ALL_COUNTRIES[i % len(ALL_COUNTRIES)],
-#             "Velocity": round(max(0.1, real_count * (0.01 + (i * 0.005))), 2),
-#             "lat": 40.0 + (i * 0.5), 
-#             "lon": 10.0 + (i * 0.5)
-#         })
-        
-#     return pd.DataFrame(base_results)
-
-
 st.sidebar.header("Trial details")
 
 condition = st.sidebar.selectbox(
@@ -106,7 +75,6 @@ if run:
     if condition is None or len(chosen) == 0:
         st.warning("Please select a condition and at least one candidate geographical filter in the sidebar.")
     else:
-        # ranking = predict_sites(condition)
         
         if selection_mode == "City":
             filtered_candidates = SITE_HISTORY_DF[SITE_HISTORY_DF["city"].isin(chosen)]
@@ -126,7 +94,6 @@ if run:
                     "num_conditions": 1  # Valore temporaneo in attesa dell'introduzione dei vettori MeSH nel modello
                 }
                 
-                # Rinominiamo le colonne per adeguarle alle chiavi dizionario attese dal tuo script predict.py
                 candidates_list = filtered_candidates.rename(columns={
                     "site": "facility_name",
                     "city": "city",
