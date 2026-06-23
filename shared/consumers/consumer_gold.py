@@ -17,12 +17,11 @@ def get_kafka_consumer():
         "bootstrap.servers": broker,
         "group.id": "clinical_trials_gold_features_loader",
         "auto.offset.reset": "earliest",
-        "enable.auto.commit": False, # Commit manuale ad avvenuta transazione DB
+        "enable.auto.commit": False,
     }
     return Consumer(conf)
 
 def save_trial_features(cur, records):
-    """Esegue l'upsert massivo dei set di feature analitiche."""
     if not records:
         return
 
@@ -61,17 +60,16 @@ def save_trial_features(cur, records):
     print(f"[INFO DB]: Upsert completato per {len(records)} righe in gold.trial_features.")
 
 def flush_buffer(records):
-    """Scrive il blocco sul database gestendo il rollback automatico."""
     if not records:
         return
     
     conn = psycopg2.connect(DSN)
     try:
-        with conn, conn.cursor() as cur:
-            save_trial_features(cur, records)
-        conn.commit()
+        # Sfruttiamo appieno il context manager di psycopg2 che apre e chiude la transazione automaticamente
+        with conn:
+            with conn.cursor() as cur:
+                save_trial_features(cur, records)
     except Exception as e:
-        conn.rollback()
         print(f"[ERR DB - GOLD]: Errore durante il caricamento delle feature: {e}")
         raise e
     finally:
@@ -108,7 +106,7 @@ def main():
                 payload = json.loads(msg.value().decode("utf-8"))
                 buffer.append(payload)
 
-            if len(buffer) >= BATCH_SIZE:
+            if buffer:
                 flush_buffer(buffer)
                 consumer.commit(asynchronous=False)
                 buffer.clear()

@@ -3,22 +3,17 @@ import json
 from confluent_kafka import Producer
 
 def build_kafka_producer():
-    """Create a Kafka producer from environment config, or None if not configured."""
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS")
     if not broker:
         print("[INFO]: KAFKA_BROKER/KAFKA_BOOTSTRAP_SERVERS not set; skipping Kafka production.")
         return None
     return Producer({"bootstrap.servers": broker})
 
-
 def delivery_report(err, msg):
-    """Callback per verificare la corretta consegna del messaggio."""
     if err is not None:
         print(f"[ERR KAFKA]: Consegna fallita: {err}")
 
-
 def produce_study_to_kafka(producer, study):
-    """Produce un singolo payload JSON sul topic bronze."""
     if producer is None:
         return
     topic = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
@@ -36,9 +31,7 @@ def produce_study_to_kafka(producer, study):
     )
     producer.poll(0)
 
-
 def produce_silver_partition_to_kafka(rows, topic_name=None):
-    """Produce i record trasformati sui topic Silver/Gold dai nodi Worker di Spark."""
     rows = list(rows)
     if not rows:
         return
@@ -62,11 +55,9 @@ def produce_silver_partition_to_kafka(rows, topic_name=None):
                 callback=delivery_report,
             )
             
-            # Esegue il poll ogni 100 messaggi per evitare l'overhead di I/O sulla CPU del worker
-            if idx % 100 == 0:
+            if idx % 50 == 0:
                 producer.poll(0)
             
-        # Forza l'invio finale e svuota il buffer della partizione corrente prima di chiudere il task Spark
         producer.flush()
     except Exception as e:
         print(f"[ERR SPARK WORKER]: Errore durante la scrittura parallela su Kafka: {e}")

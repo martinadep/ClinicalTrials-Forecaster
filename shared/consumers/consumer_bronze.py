@@ -15,7 +15,7 @@ def get_kafka_consumer():
         "bootstrap.servers": broker,
         "group.id": "clinical_trials_bronze_loader",
         "auto.offset.reset": "earliest",
-        "enable.auto.commit": False, # Commit manuale
+        "enable.auto.commit": False, 
     }
     return Consumer(conf)
 
@@ -60,7 +60,7 @@ def main():
         print("[STOP]: Consumer Bronze arrestato manualmente.")
     except Exception as e:
         print(f"[CRITICAL ERR]: Errore bloccante nel consumer Bronze: {e}")
-        sys.exit(1) # Rilascia l'applicazione per far ripartire il pod/container da zero ed evitare data loss
+        sys.exit(1)
     finally:
         consumer.close()
 

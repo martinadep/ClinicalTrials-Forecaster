@@ -10,7 +10,6 @@ from shared.db import build_dsn_from_env
 
 load_dotenv()
 DSN = build_dsn_from_env()
-
 TOPIC_SILVER_TRIALS = "trials.silver"
 TOPIC_SILVER_SITES = "sites.silver"
 TOPIC_GOLD_MESH = "mesh.gold"
@@ -25,9 +24,7 @@ def get_kafka_consumer():
     }
     return Consumer(conf)
 
-
 def save_trials(cur, records):
-    """Upsert massivo dei Trial normalizzati."""
     now_ts = datetime.datetime.now()
     psycopg2.extras.execute_values(
         cur,
@@ -62,9 +59,7 @@ def save_trials(cur, records):
     )
     print(f"[INFO DB]: Caricati {len(records)} record in silver.trials.")
 
-
 def save_sites(cur, records):
-    """Sincronizzazione dei siti associati ai trial."""
     nct_ids = list(set(r["nct_id"] for r in records if r.get("nct_id")))
     if nct_ids:
         cur.execute("DELETE FROM silver.trial_sites WHERE nct_id = ANY(%s)", (nct_ids,))
@@ -89,9 +84,7 @@ def save_sites(cur, records):
     )
     print(f"[INFO DB]: Sincronizzati {len(records)} record in silver.trial_sites.")
 
-
 def save_mesh(cur, records):
-    """Upsert delle condizioni mediche MeSH di riferimento."""
     psycopg2.extras.execute_values(
         cur,
         """
@@ -107,32 +100,26 @@ def save_mesh(cur, records):
     )
     print(f"[INFO DB]: Aggiornate {len(records)} dimensioni in gold.dim_mesh_conditions.")
 
-
 def flush_all_buffers(buffer):
-    """Invia i dati strutturati puliti al database all'interno di una transazione atomica."""
-    has_data = (
-        buffer.get(TOPIC_SILVER_TRIALS) or
-        buffer.get(TOPIC_SILVER_SITES) or
-        buffer.get(TOPIC_GOLD_MESH)
-    )
-    if not has_data:
+    """Esegue lo scaricamento garantendo atomicità completa: o tutto o niente."""
+    if not buffer:
         return
 
     conn = psycopg2.connect(DSN)
     try:
-        with conn, conn.cursor() as cur:
-            if buffer.get(TOPIC_SILVER_TRIALS):
-                save_trials(cur, buffer[TOPIC_SILVER_TRIALS])
-            if buffer.get(TOPIC_SILVER_SITES):
-                save_sites(cur, buffer[TOPIC_SILVER_SITES])
-            if buffer.get(TOPIC_GOLD_MESH):
-                save_mesh(cur, buffer[TOPIC_GOLD_MESH])
+        with conn: # Gestisce il commit/rollback dell'intero pacchetto multi-tabella
+            with conn.cursor() as cur:
+                if TOPIC_SILVER_TRIALS in buffer:
+                    save_trials(cur, buffer[TOPIC_SILVER_TRIALS])
+                if TOPIC_SILVER_SITES in buffer:
+                    save_sites(cur, buffer[TOPIC_SILVER_SITES])
+                if TOPIC_GOLD_MESH in buffer:
+                    save_mesh(cur, buffer[TOPIC_GOLD_MESH])
     except Exception as e:
-        print(f"[ERR DB - SILVER]: Svuotamento buffer relazionale fallito: {e}")
+        print(f"[ERR DB - SILVER]: Svuotamento buffer relazionale fallito atomica: {e}")
         raise e
     finally:
         conn.close()
-
 
 def main():
     consumer = get_kafka_consumer()
@@ -176,8 +163,6 @@ def main():
         print("[STOP]: Consumer Silver arrestato manualmente.")
     except Exception as e:
         print(f"[CRITICAL ERR]: Crash del consumer relazionale per protezione dati. Errore: {e}")
-        # NON svuotiamo il buffer e non continuiamo il ciclo. Facciamo morire l'app
-        # in modo che i sistemi di orchestrazione la riavviino senza perdere offset su Kafka.
         sys.exit(1)
     finally:
         consumer.close()
