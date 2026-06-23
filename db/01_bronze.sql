@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS bronze.trials (
     brief_title               TEXT,
     brief_summary             TEXT,
     conditions                JSONB,
+    mesh_conditions           JSONB,
     study_type                TEXT,
     phases                    TEXT[],
     primary_purpose           TEXT,

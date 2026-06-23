@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS silver.trials (
     maximum_age_years         NUMERIC,
     enrollment_duration_months NUMERIC,
     trial_velocity            NUMERIC,   
+    mesh_conditions_ids       TEXT[],
     transformed_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -32,7 +33,7 @@ CREATE TABLE IF NOT EXISTS silver.trial_sites (
     country                   TEXT,
     latitude                  NUMERIC,
     longitude                 NUMERIC,
-    conditions                TEXT[],
+    mesh_conditions_ids       TEXT[],
     transformed_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
