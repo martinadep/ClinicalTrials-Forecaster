@@ -1,8 +1,8 @@
 import os
 import psycopg2
 import psycopg2.extras
-
-# Rimosso l'import di extract_trial_fields perché il parsing ora lo fa Spark!
+import hashlib
+import json
 
 def build_dsn_from_env():
     user = os.getenv("POSTGRES_USER")
@@ -63,9 +63,8 @@ def insert_bronze_studies_bulk(records, dsn=None):
             if not nct_id:
                 continue
 
-            # Generiamo l'hash sul dizionario raw (puoi passarlo calcolato se serve o calcolarlo qui)
-            # Per ora manteniamo la compatibilità inserendo None o calcolandolo se hai la funzione a disposizione
-            payload_hash = None 
+            study_json_bytes = json.dumps(study, sort_keys=True).encode('utf-8')
+            payload_hash = hashlib.sha256(study_json_bytes).hexdigest()
 
             raw_payload = psycopg2.extras.Json(study)
             raw_trials_batch.append((nct_id, payload_hash, raw_payload))

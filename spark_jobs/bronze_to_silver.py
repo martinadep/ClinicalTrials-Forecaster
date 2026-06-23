@@ -1,6 +1,7 @@
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, coalesce, explode, row_number, lit, expr, round, datediff, to_date
+from pyspark.sql.functions import col, coalesce, explode, row_number, lit, expr, round, datediff, to_date, from_json, regexp_replace, split
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType, DoubleType, ArrayType
 from pyspark.sql.window import Window
 
 from shared.config import load_dotenv
@@ -12,6 +13,69 @@ TOPIC_BRONZE = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
 TOPIC_SILVER_TRIALS = "trials.silver"
 TOPIC_SILVER_SITES = "sites.silver"
 TOPIC_GOLD_MESH = "mesh.gold" 
+
+# SCHEMA AGGIORNATO E CORRETTO SUL PAYLOAD REALE
+JSON_SCHEMA = StructType([
+    StructField("protocolSection", StructType([
+        StructField("identificationModule", StructType([
+            StructField("nctId", StringType()),
+            StructField("briefTitle", StringType())
+        ])),
+        StructField("descriptionModule", StructType([
+            StructField("briefSummary", StringType())
+        ])),
+        StructField("designModule", StructType([
+            StructField("studyType", StringType()),
+            StructField("phases", ArrayType(StringType())),
+            StructField("designInfo", StructType([
+                StructField("primaryPurpose", StringType())
+            ])),
+            StructField("enrollmentInfo", StructType([
+                StructField("count", IntegerType())  # <-- Cambiato in IntegerType perché nel JSON è un numero
+            ]))
+        ])),
+        StructField("statusModule", StructType([
+            StructField("overallStatus", StringType()),
+            StructField("startDateStruct", StructType([StructField("date", StringType())])),
+            StructField("primaryCompletionDateStruct", StructType([
+                StructField("date", StringType()),
+                StructField("type", StringType())
+            ]))
+        ])),
+        StructField("sponsorCollaboratorsModule", StructType([
+            StructField("leadSponsor", StructType([
+                StructField("name", StringType()),
+                StructField("class", StringType())  # <-- Cambiato da 'type' a 'class'
+            ]))
+        ])),
+        StructField("eligibilityModule", StructType([
+            StructField("sex", StringType()),
+            StructField("minimumAge", StringType()),
+            StructField("maximumAge", StringType())
+        ])),
+        StructField("contactsLocationsModule", StructType([
+            StructField("locations", ArrayType(StructType([
+                StructField("facility", StringType()),
+                StructField("city", StringType()),
+                StructField("state", StringType()),
+                StructField("zip", StringType()),
+                StructField("country", StringType()),
+                StructField("geoPoint", StructType([
+                    StructField("lat", DoubleType()),
+                    StructField("lon", DoubleType())
+                ]))
+            ])))
+        ]))
+    ])),
+    StructField("derivedSection", StructType([
+        StructField("conditionBrowseModule", StructType([
+            StructField("meshes", ArrayType(StructType([
+                StructField("id", StringType()),
+                StructField("term", StringType())
+            ])))
+        ]))
+    ]))
+])
 
 def main():
     load_dotenv()
@@ -32,91 +96,119 @@ def main():
         .load()
     )
 
-    # 2. Stringifica il valore ed estrai l'NCT_ID iniziale per la deduplica
-    df_with_id = raw_df.select(
-        col("value").cast("string").alias("json_str"),
+    # 2. Parsing strutturato dell'intero JSON
+    parsed_df = raw_df.select(
         col("timestamp").alias("kafka_ts"),
-        expr("get_json_object(string(value), '$.protocolSection.identificationModule.nctId')").alias("nct_id")
-    ).filter(col("nct_id").isNotNull())
+        from_json(col("value").cast("string"), JSON_SCHEMA).alias("data")
+    ).filter(col("data.protocolSection.identificationModule.nctId").isNotNull())
 
-    # 3. Deduplicazione nativa
+    proto = col("data.protocolSection")
+    derived = col("data.derivedSection")
+
+    # 3. Deduplicazione nativa sulla Window
     window_spec = Window.partitionBy("nct_id").orderBy(col("kafka_ts").desc())
-    deduped_df = df_with_id.withColumn("row_num", row_number().over(window_spec)) \
-                           .filter(col("row_num") == 1) \
-                           .drop("row_num")
+    deduped_df = parsed_df.select(
+        proto.identificationModule.nctId.alias("nct_id"),
+        proto.identificationModule.briefTitle.alias("brief_title"),
+        proto.descriptionModule.briefSummary.alias("brief_summary"),
+        proto.designModule.studyType.alias("study_type"),
+        proto.designModule.designInfo.primaryPurpose.alias("primary_purpose"),
+        proto.statusModule.overallStatus.alias("overall_status"),
+        # FIX: Estratto correttamente .class usando la notazione a stringa per evitare conflitti con parole riservate
+        proto.sponsorCollaboratorsModule.leadSponsor.getItem("class").alias("lead_sponsor_class"),
+        proto.designModule.phases[0].alias("phase"),
+        proto.designModule.enrollmentInfo.count.alias("enrollment_count"),
+        proto.statusModule.startDateStruct.date.alias("start_date_raw"),
+        proto.statusModule.primaryCompletionDateStruct.date.alias("completion_date_raw"),
+        proto.eligibilityModule.sex.alias("sex"),
+        proto.eligibilityModule.minimumAge.alias("minimum_age_raw"),
+        proto.eligibilityModule.maximumAge.alias("maximum_age_raw"),
+        proto.contactsLocationsModule.locations.alias("locations"),
+        derived.conditionBrowseModule.meshes.alias("meshes_struct"),
+        col("kafka_ts")
+    ).withColumn("row_num", row_number().over(window_spec)) \
+     .filter(col("row_num") == 1) \
+     .drop("row_num")
 
     deduped_df.cache()
 
     # --- 4. TRASFORMAZIONE E COSTRUZIONE TRIALS (SILVER) ---
-    trials_df = deduped_df.select(
-        col("nct_id"),
-        expr("get_json_object(json_str, '$.protocolSection.identificationModule.briefTitle')").alias("brief_title"),
-        expr("get_json_object(json_str, '$.protocolSection.descriptionModule.briefSummary')").alias("brief_summary"),
-        expr("upper(get_json_object(json_str, '$.protocolSection.designModule.studyType'))").alias("study_type"),
-        expr("upper(get_json_object(json_str, '$.protocolSection.designModule.designInfo.primaryPurpose'))").alias("primary_purpose"),
-        expr("upper(get_json_object(json_str, '$.protocolSection.statusModule.overallStatus'))").alias("overall_status"),
-        expr("upper(get_json_object(json_str, '$.protocolSection.sponsorCollaboratorsModule.leadSponsor.class'))").alias("lead_sponsor_class"),
-        expr("upper(coalesce(get_json_object(json_str, '$.protocolSection.designModule.phases[0]'), 'UNKNOWN'))").alias("phase"),
-        expr("cast(get_json_object(json_str, '$.protocolSection.designModule.enrollmentInfo.count') as int)").alias("enrollment_count"),
-        
-        # <<< MODIFICA APPLICATA QUI: NORMALIZZAZIONE DELLE DATE PARZIALI >>>
+    # Normalizzazione Date Parziali
+    trials_df = deduped_df.withColumn(
+        "start_date",
         expr("""
             CASE 
-                WHEN length(get_json_object(json_str, '$.protocolSection.statusModule.startDateStruct.date')) = 7 
-                    THEN concat(get_json_object(json_str, '$.protocolSection.statusModule.startDateStruct.date'), '-01')
-                WHEN length(get_json_object(json_str, '$.protocolSection.statusModule.startDateStruct.date')) = 4 
-                    THEN concat(get_json_object(json_str, '$.protocolSection.statusModule.startDateStruct.date'), '-01-01')
-                ELSE coalesce(get_json_object(json_str, '$.protocolSection.statusModule.startDateStruct.date'), '1970-01-01')
+                WHEN length(start_date_raw) = 7 THEN concat(start_date_raw, '-01')
+                WHEN length(start_date_raw) = 4 THEN concat(start_date_raw, '-01-01')
+                ELSE coalesce(start_date_raw, '1970-01-01')
             END
-        """).alias("start_date"),
-        
+        """)
+    ).withColumn(
+        "primary_completion_date",
         expr("""
             CASE 
-                WHEN length(get_json_object(json_str, '$.protocolSection.statusModule.primaryCompletionDateStruct.date')) = 7 
-                    THEN concat(get_json_object(json_str, '$.protocolSection.statusModule.primaryCompletionDateStruct.date'), '-01')
-                WHEN length(get_json_object(json_str, '$.protocolSection.statusModule.primaryCompletionDateStruct.date')) = 4 
-                    THEN concat(get_json_object(json_str, '$.protocolSection.statusModule.primaryCompletionDateStruct.date'), '-01-01')
-                ELSE coalesce(get_json_object(json_str, '$.protocolSection.statusModule.primaryCompletionDateStruct.date'), '1970-01-01')
+                WHEN length(completion_date_raw) = 7 THEN concat(completion_date_raw, '-01')
+                WHEN length(completion_date_raw) = 4 THEN concat(completion_date_raw, '-01-01')
+                ELSE coalesce(completion_date_raw, '1970-01-01')
             END
-        """).alias("primary_completion_date"),
-        
-        expr("upper(coalesce(get_json_object(json_str, '$.protocolSection.eligibilityModule.sex'), 'ALL'))").alias("sex"),
-        expr("get_json_object(json_str, '$.protocolSection.eligibilityModule.minimumAge')").alias("minimum_age_raw"),
-        expr("get_json_object(json_str, '$.protocolSection.eligibilityModule.maximumAge')").alias("maximum_age_raw"),
-        expr("from_json(get_json_object(json_str, '$.derivedSection.conditionBrowseModule.meshes'), 'array<struct<id:string,term:string>>')").alias("meshes_struct")
+        """)
     )
 
-    # Calcoli di Velocity e Duration
+    # Funzione di Parsing dell'età
+    def parse_age_column(col_name):
+        return expr(f"""
+            CASE 
+                WHEN {col_name} IS NULL THEN NULL
+                WHEN lower({col_name}) LIKE '%year%' THEN cast(split({col_name}, ' ')[0] as double)
+                WHEN lower({col_name}) LIKE '%month%' THEN cast(split({col_name}, ' ')[0] as double) / 12.0
+                WHEN lower({col_name}) LIKE '%week%' THEN cast(split({col_name}, ' ')[0] as double) / 52.17
+                WHEN lower({col_name}) LIKE '%day%' THEN cast(split({col_name}, ' ')[0] as double) / 365.25
+                ELSE cast(regexp_replace({col_name}, '[^0-9.]', '') as double)
+            END
+        """)
+
+    trials_df = trials_df.withColumn("minimum_age_years", parse_age_column("minimum_age_raw")) \
+                         .withColumn("maximum_age_years", parse_age_column("maximum_age_raw"))
+
+    # Calcoli di Velocity e Duration stabili
     trials_df = trials_df.withColumn(
         "enrollment_duration_months", 
-        round(expr("case when start_date = '1970-01-01' or primary_completion_date = '1970-01-01' then 0.0 else case when datediff(to_date(primary_completion_date), to_date(start_date)) < 0 then 0.0 else datediff(to_date(primary_completion_date), to_date(start_date)) / 30.44 end end"), 2)
+        round(
+            expr("""
+                CASE 
+                    WHEN start_date = '1970-01-01' OR primary_completion_date = '1970-01-01' THEN 0.0 
+                    WHEN datediff(to_date(primary_completion_date), to_date(start_date)) < 0 THEN 0.0 
+                    ELSE datediff(to_date(primary_completion_date), to_date(start_date)) / 30.44 
+                END
+            """), 2
+        )
     )
     
     trials_df = trials_df.withColumn(
         "trial_velocity",
-        round(expr("case when enrollment_count is null or enrollment_duration_months <= 0 then 0.0 else enrollment_count / enrollment_duration_months end"), 4)
+        round(
+            expr("CASE WHEN enrollment_count IS NULL OR enrollment_duration_months <= 0 THEN 0.0 ELSE enrollment_count / enrollment_duration_months END"), 4
+        )
     )
     
     trials_df = trials_df.withColumn("mesh_conditions_ids", expr("transform(meshes_struct, x -> x.id)"))
+    trials_df = trials_df.withColumn("phase", coalesce(col("phase"), lit("UNKNOWN")))
+    trials_df = trials_df.withColumn("sex", coalesce(col("sex"), lit("ALL")))
 
     # --- 5. TRASFORMAZIONE E COSTRUZIONE SITES (SILVER) ---
-    sites_raw = deduped_df.select(
-        col("nct_id"),
-        expr("from_json(get_json_object(json_str, '$.protocolSection.contactsLocationsModule.locations'), 'array<struct<facility:string,city:string,state:string,zip:string,country:string,geoPoint:struct<lat:double,lon:double>>>')").alias("locs"),
-        expr("from_json(get_json_object(json_str, '$.derivedSection.conditionBrowseModule.meshes'), 'array<struct<id:string,term:string>>')").alias("meshes_struct")
-    ).withColumn("loc", explode("locs"))
-
-    sites_df = sites_raw.select(
-        col("nct_id"),
-        coalesce(col("loc.facility"), lit("UNKNOWN FACILITY")).alias("facility_name"),
-        coalesce(col("loc.city"), lit("UNKNOWN CITY")).alias("city"),
-        coalesce(col("loc.state"), lit("N/A")).alias("state"),
-        coalesce(col("loc.zip"), lit("N/A")).alias("zip"),
-        coalesce(col("loc.country"), lit("UNKNOWN")).alias("country"),
-        coalesce(col("loc.geoPoint.lat"), lit(0.0)).alias("latitude"),
-        coalesce(col("loc.geoPoint.lon"), lit(0.0)).alias("longitude"),
-        expr("transform(meshes_struct, x -> x.id)").alias("mesh_conditions_ids")
-    )
+    sites_df = trials_df.filter(col("locations").isNotNull()) \
+        .withColumn("loc", explode("locations")) \
+        .select(
+            col("nct_id"),
+            coalesce(col("loc.facility"), lit("UNKNOWN FACILITY")).alias("facility_name"),
+            coalesce(col("loc.city"), lit("UNKNOWN CITY")).alias("city"),
+            coalesce(col("loc.state"), lit("N/A")).alias("state"),
+            coalesce(col("loc.zip"), lit("N/A")).alias("zip"),
+            coalesce(col("loc.country"), lit("UNKNOWN")).alias("country"),
+            coalesce(col("loc.geoPoint.lat"), lit(0.0)).alias("latitude"),
+            coalesce(col("loc.geoPoint.lon"), lit(0.0)).alias("longitude"),
+            col("mesh_conditions_ids")
+        )
 
     # --- 6. TRASFORMAZIONE E COSTRUZIONE MESH MAPPINGS (GOLD MESH) ---
     mesh_df = trials_df.filter(col("meshes_struct").isNotNull())\
@@ -124,17 +216,17 @@ def main():
         .select(col("m.id").alias("mesh_condition_id"), col("m.term").alias("mesh_condition_name"))\
         .distinct()
 
-    trials_final = trials_df.drop("meshes_struct", "minimum_age_raw", "maximum_age_raw")
+    trials_final = trials_df.drop("meshes_struct", "minimum_age_raw", "maximum_age_raw", "start_date_raw", "completion_date_raw", "locations")
 
     # --- 7. SCRITTURA SU KAFKA ---
     trials_final.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value") \
-        .foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_SILVER_TRIALS))
+        .rdd.foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_SILVER_TRIALS))
 
     sites_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value") \
-        .foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_SILVER_SITES))
+        .rdd.foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_SILVER_SITES))
 
     mesh_df.selectExpr("cast(mesh_condition_id as string) as key", "to_json(struct(*)) as value") \
-        .foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_GOLD_MESH))
+        .rdd.foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, TOPIC_GOLD_MESH))
 
     print(f"[INFO]: Pipeline Spark Bronze -> Silver completata con successo in modo nativo.")
     spark.stop()

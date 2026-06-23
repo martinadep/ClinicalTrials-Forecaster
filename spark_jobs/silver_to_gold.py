@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
@@ -8,6 +9,7 @@ from shared.db import build_jdbc_url_from_env, truncate_tables
 from shared.kafka import produce_silver_partition_to_kafka 
 
 def read_table(spark, jdbc_url, properties, dbtable):
+    """Carica una tabella via JDBC."""
     return spark.read.jdbc(url=jdbc_url, table=dbtable, properties=properties)
 
 def main():
@@ -15,46 +17,45 @@ def main():
     jdbc_url, jdbc_props = build_jdbc_url_from_env()
     TOPIC_GOLD_FEATURES = os.getenv("KAFKA_TOPIC_GOLD_FEATURES", "trials.gold")
 
-    spark = SparkSession.builder.appName("silver_to_gold").getOrCreate()
+    # Inizializzazione Spark Session
+    spark = SparkSession.builder \
+        .appName("silver_to_gold") \
+        .getOrCreate()
+    
     spark.sparkContext.setLogLevel("ERROR") 
 
-    # 1. Caricamento tabelle Silver
-    trials_df = read_table(spark, jdbc_url, jdbc_props, "silver.trials").cache()
+    trials_df = read_table(spark, jdbc_url, jdbc_props, "silver.trials") \
+        .filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150)) \
+        .cache()
+
     raw_sites_df = read_table(spark, jdbc_url, jdbc_props, "silver.trial_sites")
     
+    # Filtro centralizzato per i siti validi
     sites_df = raw_sites_df.filter(
         F.col("facility_name").isNotNull() & 
         (F.trim(F.col("facility_name")) != "") &
         (F.upper(F.trim(F.col("facility_name"))) != "UNKNOWN FACILITY")
     ).cache()
 
-    trials_df = trials_df.filter((F.col("trial_velocity") >= 0) & (F.col("trial_velocity") < 150))
-    
-    # Lettura ottimizzata delle condizioni esplose
-    exploded_conditions_df = read_table(
-        spark, jdbc_url, jdbc_props,
-        """
-        (SELECT nct_id, facility_name, city, state, zip, country, unnest(mesh_conditions_ids) AS condition_id
-         FROM silver.trial_sites
-         WHERE mesh_conditions_ids IS NOT NULL AND country IS NOT NULL AND city IS NOT NULL AND zip IS NOT NULL
-           AND facility_name IS NOT NULL 
-           AND TRIM(facility_name) != ''
-           AND UPPER(TRIM(facility_name)) != 'UNKNOWN FACILITY'
-        ) AS sc_exploded
-        """,
-    )
-    
+    # Filtro geografico stretto per le aggregazioni storiche
     sites_with_geo_key = sites_df.filter(
         F.col("country").isNotNull() & F.col("city").isNotNull() & F.col("zip").isNotNull()
     )
     
+    # Esplosione delle condizioni (Spostata da PostgreSQL a Spark per performance)
+    exploded_conditions_df = sites_with_geo_key.filter(
+        F.col("mesh_conditions_ids").isNotNull()
+    ).withColumn("condition_id", F.explode(F.col("mesh_conditions_ids")))
+    
+    # Join per associare la velocità del trial ai siti geografici
     sites_with_velocity = sites_with_geo_key.join(
-        trials_df.select("nct_id", "trial_velocity", "start_date"), on="nct_id", how="left"
+        trials_df.select("nct_id", "trial_velocity", "start_date"), 
+        on="nct_id", 
+        how="left"
     ).withColumn(
         "trial_velocity", F.coalesce(F.col("trial_velocity"), F.lit(0.0))
     )
 
-    # 2. Calcolo aggregati Gold per i Siti
     site_history_df = (
         sites_with_velocity.groupBy("country", "city", "zip")
         .agg(
@@ -75,7 +76,6 @@ def main():
         .withColumnRenamed("condition_id", "mesh_condition_id")
     )
 
-    # Tronca e sovrascrive le tabelle storiche aggregate (Essendo tabelle analitiche di snapshot)
     print("[INFO]: Tronco le tabelle storiche dei siti...")
     truncate_tables(["gold.site_conditions_history", "gold.site_history"])
     
@@ -87,7 +87,7 @@ def main():
         "country", "city", "zip", "mesh_condition_id", "n_trials_for_condition"
     ).write.jdbc(url=jdbc_url, table="gold.site_conditions_history", mode="append", properties=jdbc_props)
     
-    # 3. Calcolo delle Feature dei Trial (Machine Learning Ready)
+
     n_sites_df = sites_df.groupBy("nct_id").agg(F.count("*").alias("n_sites"))
 
     site_stats_per_trial = (
@@ -135,7 +135,9 @@ def main():
         F.col("target_velocity").cast("double")
     )
 
+    print("[INFO]: Invio delle feature trasformate al topic Kafka...")
     trial_features_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value") \
+        .rdd \
         .foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, topic_name=TOPIC_GOLD_FEATURES))
     
     print("### [SUCCESS]: Pipeline silver_to_gold completata correttamente.")
