@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS gold.trial_features (
     avg_site_exp              NUMERIC, 
     avg_site_vel              NUMERIC, 
     target_velocity           NUMERIC 
+    has_non_diagnostic_condition BOOLEAN,
+    avg_site_exp              NUMERIC,
+    avg_site_vel              NUMERIC,
+    target_velocity           NUMERIC
 );
 
 CREATE TABLE IF NOT EXISTS gold.site_conditions_history (
