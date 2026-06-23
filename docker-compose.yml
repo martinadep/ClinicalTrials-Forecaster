@@ -134,11 +134,10 @@ services:
       kafka-init:
         condition: service_completed_successfully
     command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python shared/consumers/consumer_bronze.py"
-
-  consumer-silver:
+      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_bronze.py"
+  consumer-silver-trials:
     image: python:3.11-slim
-    container_name: clinical_trial_consumer_silver
+    container_name: clinical_trial_consumer_silver_trials
     working_dir: /app
     volumes:
       - .:/app
@@ -157,8 +156,52 @@ services:
       kafka-init:
         condition: service_completed_successfully
     command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python shared/consumers/consumer_silver.py"
-
+      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_silver_trials.py"
+  consumer-silver-sites:
+    image: python:3.11-slim
+    container_name: clinical_trial_consumer_silver_sites
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_BROKER=kafka:29092
+      - POSTGRES_HOST=clinical_trial_db
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_PORT=5432
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    command: >
+      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_silver_sites.py"
+  consumer-gold-mesh:
+    image: python:3.11-slim
+    container_name: clinical_trial_consumer_gold_mesh
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONPATH=/app
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
+      - KAFKA_BROKER=kafka:29092
+      - POSTGRES_HOST=clinical_trial_db
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_PORT=5432
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    command: >
+      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_gold_mesh.py"
+    
   consumer-gold:
     image: python:3.11-slim
     container_name: clinical_trial_consumer_gold
@@ -181,7 +224,8 @@ services:
       kafka-init:
         condition: service_completed_successfully
     command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python shared/consumers/consumer_gold.py"
+      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_gold.py"
+
 
 volumes:
   postgres_data:

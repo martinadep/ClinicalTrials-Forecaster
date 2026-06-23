@@ -1,6 +1,7 @@
 import os
 import json
 import sys
+import datetime
 import psycopg2
 import psycopg2.extras
 from confluent_kafka import Consumer, KafkaError, KafkaException
@@ -15,7 +16,7 @@ def get_kafka_consumer():
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     conf = {
         "bootstrap.servers": broker,
-        "group.id": "clinical_trials_gold_features_loader",
+        "group.id": "clinical_trials_gold_features_loader_v3",  
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     }
@@ -49,7 +50,7 @@ def save_trial_features(cur, records):
         """,
         [
             (
-                r["nct_id"], r.get("study_type"), r.get("primary_purpose"), r.get("lead_sponsor_class"), r.get("sex"),
+                r.get("nct_id"), r.get("study_type"), r.get("primary_purpose"), r.get("lead_sponsor_class"), r.get("sex"),
                 r.get("phase"), r.get("enrollment_count"), r.get("n_sites"), r.get("duration_months"),
                 r.get("mesh_conditions_ids", []), r.get("avg_site_exp"), r.get("avg_site_vel"), r.get("target_velocity")
             )
@@ -65,12 +66,11 @@ def flush_buffer(records):
     
     conn = psycopg2.connect(DSN)
     try:
-        # Sfruttiamo appieno il context manager di psycopg2 che apre e chiude la transazione automaticamente
         with conn:
             with conn.cursor() as cur:
                 save_trial_features(cur, records)
     except Exception as e:
-        print(f"[ERR DB - GOLD]: Errore durante il caricamento delle feature: {e}")
+        print(f"[ERR DB - GOLD]: Error during feature loading: {e}")
         raise e
     finally:
         conn.close()
@@ -78,7 +78,7 @@ def flush_buffer(records):
 def main():
     consumer = get_kafka_consumer()
     consumer.subscribe([TOPIC_GOLD_FEATURES])
-    print(f"[START]: Consumer GOLD attivo in ascolto sulle feature in streaming: {TOPIC_GOLD_FEATURES}")
+    print(f"[START]: Consumer GOLD active at: {TOPIC_GOLD_FEATURES}")
 
     BATCH_SIZE = 500
     TIMEOUT = 3.0
@@ -90,9 +90,9 @@ def main():
             
             if not messages:
                 if buffer:
+                    print(f"[TIMEOUT]: Svuotato buffer residuo delle feature ({len(buffer)} record).")
                     flush_buffer(buffer)
                     consumer.commit(asynchronous=False)
-                    print(f"[TIMEOUT]: Svuotato buffer residuo delle feature ({len(buffer)} record).")
                     buffer.clear()
                 continue
 
@@ -103,18 +103,30 @@ def main():
                     else:
                         raise KafkaException(msg.error())
                 
-                payload = json.loads(msg.value().decode("utf-8"))
-                buffer.append(payload)
+                try:
+                    kafka_envelope = json.loads(msg.value().decode("utf-8"))
+                    
+                    if isinstance(kafka_envelope, dict) and "value" in kafka_envelope:
+                        actual_record = json.loads(kafka_envelope["value"]) if isinstance(kafka_envelope["value"], str) else kafka_envelope["value"]
+                    else:
+                        actual_record = kafka_envelope
+                    
+                    if "nct_id" in actual_record:
+                        buffer.append(actual_record)
+                        
+                except Exception as parse_err:
+                    print(f"[ERR PARSING GOLD MSG]: Decodification Error: {parse_err}")
 
             if buffer:
+                print(f"[BATCH]: Writing {len(buffer)} into DB...")
                 flush_buffer(buffer)
                 consumer.commit(asynchronous=False)
                 buffer.clear()
 
     except KeyboardInterrupt:
-        print("[STOP]: Consumer Gold interrotto dall'utente.")
+        print("[STOP]: Consumer Gold interrupted by user.")
     except Exception as e:
-        print(f"[CRITICAL ERR]: Crash irreversibile nel consumer Gold: {e}")
+        print(f"[CRITICAL ERR]: Consumer Gold crashed: {e}")
         sys.exit(1)
     finally:
         consumer.close()

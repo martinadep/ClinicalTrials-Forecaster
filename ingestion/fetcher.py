@@ -1,8 +1,8 @@
-import json
-import time
 import os
-import requests
+import time
 import datetime
+import requests
+import json
 
 from shared.config import load_dotenv
 from shared.kafka import build_kafka_producer, produce_study_to_kafka
@@ -40,79 +40,51 @@ def fetch_clinical_trial(page_token=None, is_daily_run=False):
                 time.sleep(SLEEP_RETRY)
     return None
 
-
-def _write_study_to_file(study, fallback_id):
-    sid = study.get("protocolSection", {}).get("identificationModule", {}).get("nctId") or fallback_id
-    with open(f"sample_study_{sid}.json", "w", encoding="utf-8") as f:
-        f.write(json.dumps(study, indent=2))
-
-
-def process_page(study_list, producer=None):
+def process_page(study_list, producer):
     inserted = 0
-    for idx, study in enumerate(study_list):
+    for study in study_list:
         try:
-            if producer:
-                produce_study_to_kafka(producer, study)
-            else:
-                _write_study_to_file(study, idx)
+            # Inviamo il dizionario RAW integro a Kafka
+            produce_study_to_kafka(producer, study)
             inserted += 1
         except Exception as e:
             print(f"[ERR]: Failed inserting study: {e}")
     return inserted
 
-
 def main():
     load_dotenv()
-
     is_daily_run = os.getenv("RUN_MODE", "FULL").upper() == "DAILY"
-
     next_page_token = None
     producer = build_kafka_producer()
 
     if producer is None:
-        print("[ERR]: Could not initialize Kafka Producer. Aborting fetcher.")
+        print("[ERR]: Could not initialize Kafka Producer. Aborting.")
         return
-    else:
-        print("[INFO]: Kafka Producer initialized. Starting ingestion to trials.bronze...")
 
     page_counter = 1
     total_processed = 0
 
     while True:
-        print(f"[INFO]: Starting Fetch Page {page_counter} (Token: {next_page_token or 'Initial'})...")
-        
         result = fetch_clinical_trial(next_page_token, is_daily_run=is_daily_run)
-        if result is None:
-            print("[ERR]: Error fetching data from ClinicalTrials.gov API. Aborting.")
-            break
+        if result is None: break
 
         study_list, next_token = result
-        
-        if not study_list:
-            print("[INFO]: No more trials to fetch.")
-            break
+        if not study_list: break
 
-        inserted = process_page(study_list, producer=producer)
+        inserted = process_page(study_list, producer)
         total_processed += inserted
-        print(f"[INFO]: Page {page_counter} completed. Processed {len(study_list)} trials. Total progress: {total_processed}")
+        print(f"[INFO]: Page {page_counter} completed. Processed {len(study_list)} trials. Total: {total_processed}")
 
         if not is_daily_run and total_processed >= MAX_TRIALS:
-            print(f"[INFO]: Reached the predefined limit of significant samples ({total_processed} >= {MAX_TRIALS}). Stop Ingestion.")
             break
 
         next_page_token = next_token
         page_counter += 1
-
-        if not next_page_token:
-            print("[INFO]: Reached last page.")
-            break
-
+        if not next_page_token: break
         time.sleep(0.5)
 
     if producer is not None:
         producer.flush()
-        print(f"[INFO]: Pipeline completed successfully, trials processed: {total_processed}")
-
 
 if __name__ == "__main__":
     main()

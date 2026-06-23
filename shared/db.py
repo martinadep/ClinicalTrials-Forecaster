@@ -1,7 +1,8 @@
 import os
 import psycopg2
 import psycopg2.extras
-from ingestion.transformer import extract_trial_fields
+
+# Rimosso l'import di extract_trial_fields perché il parsing ora lo fa Spark!
 
 def build_dsn_from_env():
     user = os.getenv("POSTGRES_USER")
@@ -45,6 +46,7 @@ def generic_upsert_partition(rows, query, fields, template=None):
         conn.close()
 
 def insert_bronze_studies_bulk(records, dsn=None):
+    """Salva ESCLUSIVAMENTE il payload RAW integro nello schema Bronze."""
     if not records:
         return
 
@@ -53,32 +55,22 @@ def insert_bronze_studies_bulk(records, dsn=None):
         raise ValueError("No DSN provided and DATABASE_URL/env variables not set")
 
     raw_trials_batch = []
-    trials_batch = []
 
     for study in records:
         try:
-            fields = extract_trial_fields(study)
-            nct_id = fields.get("nct_id")
+            # Estraiamo l'NCT_ID direttamente dal dizionario RAW per usarlo come chiave di partizionamento
+            nct_id = study.get("protocolSection", {}).get("identificationModule", {}).get("nctId")
             if not nct_id:
                 continue
 
-            raw_payload = psycopg2.extras.Json(study)
-            payload_hash = fields.get("payload_hash")
-            raw_trials_batch.append((nct_id, payload_hash, raw_payload))
+            # Generiamo l'hash sul dizionario raw (puoi passarlo calcolato se serve o calcolarlo qui)
+            # Per ora manteniamo la compatibilità inserendo None o calcolandolo se hai la funzione a disposizione
+            payload_hash = None 
 
-            lead_sponsor_class = fields.get("lead_sponsor_class") or fields.get("organization_class")
-            
-            trials_batch.append((
-                fields["nct_id"], fields["brief_title"], fields.get("brief_summary"),
-                fields["conditions"], fields["mesh_conditions"], fields["study_type"],
-                fields["phases"], fields["primary_purpose"], fields["enrollment_count"],
-                fields["overall_status"], fields["start_date"], fields["primary_completion_date"],
-                lead_sponsor_class, fields.get("collaborator_names"), fields["eligibility_criteria"],
-                fields["healthy_volunteers"], fields["sex"], fields["minimum_age"],
-                fields["maximum_age"], fields["locations"]
-            ))
+            raw_payload = psycopg2.extras.Json(study)
+            raw_trials_batch.append((nct_id, payload_hash, raw_payload))
         except Exception as e:
-            print(f"[WARN PARSING]: Impossibile mappare il record per il bulk: {e}")
+            print(f"[WARN INGESTION]: Impossibile accodare il record raw nel bulk: {e}")
             continue
 
     if not raw_trials_batch:
@@ -95,25 +87,6 @@ def insert_bronze_studies_bulk(records, dsn=None):
                     payload = EXCLUDED.payload, payload_hash = EXCLUDED.payload_hash, updated_at = NOW()
                 """,
                 raw_trials_batch, template="(%s, %s, %s)"
-            )
-
-            psycopg2.extras.execute_values(
-                cur,
-                """
-                INSERT INTO bronze.trials (
-                    nct_id, brief_title, brief_summary, conditions, mesh_conditions, study_type, phases,
-                    primary_purpose, enrollment_count, overall_status, start_date, primary_completion_date, 
-                    lead_sponsor_class, collaborator_names, eligibility_criteria, healthy_volunteers, sex, 
-                    minimum_age, maximum_age, locations
-                ) VALUES %s ON CONFLICT (nct_id) DO UPDATE SET
-                    brief_title = EXCLUDED.brief_title, brief_summary = EXCLUDED.brief_summary, conditions = EXCLUDED.conditions,
-                    mesh_conditions = EXCLUDED.mesh_conditions, study_type = EXCLUDED.study_type, phases = EXCLUDED.phases,
-                    primary_purpose = EXCLUDED.primary_purpose, enrollment_count = EXCLUDED.enrollment_count, overall_status = EXCLUDED.overall_status,
-                    start_date = EXCLUDED.start_date, primary_completion_date = EXCLUDED.primary_completion_date, lead_sponsor_class = EXCLUDED.lead_sponsor_class,
-                    collaborator_names = EXCLUDED.collaborator_names, eligibility_criteria = EXCLUDED.eligibility_criteria, healthy_volunteers = EXCLUDED.healthy_volunteers,
-                    sex = EXCLUDED.sex, minimum_age = EXCLUDED.minimum_age, maximum_age = EXCLUDED.maximum_age, locations = EXCLUDED.locations, updated_at = NOW()
-                """,
-                trials_batch, template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             )
     finally:
         conn.close()

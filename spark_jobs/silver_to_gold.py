@@ -135,10 +135,8 @@ def main():
         F.col("target_velocity").cast("double")
     )
 
-    print(f"[INFO]: Invio feature trasformate al topic Kafka: {TOPIC_GOLD_FEATURES}")
-    trial_features_df.foreachPartition(
-        lambda rows: produce_silver_partition_to_kafka(rows, topic_name=TOPIC_GOLD_FEATURES)
-    )
+    trial_features_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value") \
+        .foreachPartition(lambda rows: produce_silver_partition_to_kafka(rows, topic_name=TOPIC_GOLD_FEATURES))
     
     print("### [SUCCESS]: Pipeline silver_to_gold completata correttamente.")
     spark.stop()
