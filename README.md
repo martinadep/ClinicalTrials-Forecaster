@@ -1,5 +1,14 @@
-# ClinicalTrials-Forecaster
-Project for BDT (Big Data Technologies)
+# Clinical Trial Site Selection & Recruitment Forecasting
+
+An Big Data platform designed to help researchers and trial sponsors optimize study planning. The system predicts and ranks candidate sites or regions by their expected **recruitment velocity** (patients enrolled per month), directly addressing patient recruitment delays—one of the primary causes of failure and high costs in clinical trials.
+
+The architecture is fully containerized and processes real-world, heterogeneous data from the **ClinicalTrials.gov API** through an advanced pipeline:
+
+*   **Data Streaming & Ingestion:** Batch ingestion handled by a Python producer and decoupled via **Apache Kafka** topics.
+*   **Storage & Refinement:** A **PostgreSQL Medallion Architecture** that structures raw nested JSON into clear, analytics-ready tables (Bronze, Silver, Gold layers).
+*   **Distributed Processing:** **Apache Spark** jobs for complex data cleaning and feature engineering.
+*   **Predictive Modeling:** A **Spark MLlib Gradient-Boosted Trees (GBT)** regression model that captures trial-specific dynamics and site histories, explaining ~58% of velocity variance ($R^2 \approx 0.58$).
+*   **Interactive Serving:** A user-friendly **Streamlit Dashboard** providing researchers with ranked recommendations, key performance metrics, and geographic site mapping.
 
 
 ## Running the project
