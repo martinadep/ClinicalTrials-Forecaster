@@ -12,6 +12,20 @@ Install:
 - Python 3.10+ (a virtual environment like `venv` is highly recommended)
 
 ### Setup
+(Optional) Create virtual environment.
+
+* Linux / macOS:
+```bash
+pip -m venv .venv
+source .venv/bin/activate
+```
+
+* Windows (Powershell):
+```bash
+pip -m venv .venv
+.venv/Scripts/Activate.ps1
+```
+
 Install python requirements:
 ```bash
 pip install -r requirements.txt
