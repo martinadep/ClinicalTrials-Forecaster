@@ -10,7 +10,7 @@ from shared.db import build_dsn_from_env
 
 load_dotenv()
 DSN = build_dsn_from_env()
-KAFKA_TOPIC_SILVER_TRIALS = os.getenv("KAFKA_TOPIC_SILVER_TRIALS", "trials.silver")
+KAFKA_TOPIC_SILVER_TRIALS = os.getenv("KAFKA_TOPIC_SILVER_TRIALS", "kt.silver.trials")
 
 
 def get_kafka_consumer():
@@ -89,8 +89,8 @@ def flush_buffer(records):
 
 def main():
     consumer = get_kafka_consumer()
-    consumer.subscribe([TOPIC])
-    print(f"[START]: TRIALS consumer node active on topic: {TOPIC}")
+    consumer.subscribe([KAFKA_TOPIC_SILVER_TRIALS])
+    print(f"[START]: TRIALS consumer node active on topic: {KAFKA_TOPIC_SILVER_TRIALS}")
 
     BATCH_SIZE = 500
     TIMEOUT = 3.0

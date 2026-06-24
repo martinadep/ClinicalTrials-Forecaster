@@ -16,7 +16,7 @@ def delivery_report(err, msg):
 def produce_study_to_kafka(producer, study):
     if producer is None:
         return
-    topic = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
+    topic = os.getenv("KAFKA_TOPIC_BRONZE_TRIALS", "kt.bronze.trials")
     nct_id = (
         study.get("protocolSection", {})
         .get("identificationModule", {})
@@ -40,7 +40,7 @@ def produce_silver_partition_to_kafka(rows, topic_name=None):
     if producer is None:
         return
         
-    topic = topic_name or os.getenv("KAFKA_TOPIC_SILVER", "trials.silver")
+    topic = topic_name or os.getenv("KAFKA_TOPIC_SILVER_TRIALS", "kt.silver.trials")
 
     try:
         for idx, row in enumerate(rows):

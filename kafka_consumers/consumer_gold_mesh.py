@@ -9,7 +9,7 @@ from shared.db import build_dsn_from_env
 
 load_dotenv()
 DSN = build_dsn_from_env()
-KAFKA_TOPIC_GOLD_MESH = os.getenv("KAFKA_TOPIC_GOLD_MESH", "mesh.gold")
+KAFKA_TOPIC_GOLD_MESH = os.getenv("KAFKA_TOPIC_GOLD_MESH", "kt.gold.mesh")
 
 def get_kafka_consumer():
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")

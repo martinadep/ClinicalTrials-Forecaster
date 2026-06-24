@@ -63,11 +63,11 @@ services:
     command: |
       "
       echo 'Creating Kafka topics...'
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.bronze --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.silver --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic sites.silver --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic mesh.gold --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.gold --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic kt.bronze.trials --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic kt.silver.trials --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic kt.silver.sites --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic kt.gold.mesh --partitions 3 --replication-factor 1
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic kt.gold.trials --partitions 3 --replication-factor 1
       echo 'Topics created. Current list:'
       kafka-topics --bootstrap-server kafka:29092 --list
       "
@@ -90,8 +90,8 @@ services:
       PYTHONPATH: /app
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
       KAFKA_BROKER: kafka:29092
-      KAFKA_TOPIC_BRONZE: trials.bronze
-      KAFKA_TOPIC_SILVER: trials.silver
+      KAFKA_TOPIC_BRONZE_TRIALS: kt.bronze.trials
+      KAFKA_TOPIC_SILVER_TRIALS: kt.silver.trials
       POSTGRES_HOST: clinical_trial_db
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -121,7 +121,7 @@ services:
       - PYTHONPATH=/app
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_BROKER=kafka:29092
-      - KAFKA_TOPIC_BRONZE=trials.bronze
+      - KAFKA_TOPIC_BRONZE_TRIALS=kt.bronze.trials
       - POSTGRES_HOST=clinical_trial_db
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -211,7 +211,7 @@ services:
       - PYTHONPATH=/app
       - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
       - KAFKA_BROKER=kafka:29092
-      - KAFKA_TOPIC_GOLD_FEATURES=trials.gold
+      - KAFKA_TOPIC_GOLD_FEATURES=kt.gold.trials
       - POSTGRES_HOST=clinical_trial_db
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
