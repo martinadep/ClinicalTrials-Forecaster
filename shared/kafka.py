@@ -3,15 +3,23 @@ import json
 from confluent_kafka import Producer
 
 def build_kafka_producer():
-    broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS")
+    is_docker = os.path.exists('/.dockerenv')
+    
+    if is_docker:
+        broker = os.getenv("KAFKA_BOOTSTRAP_SERVERS") or os.getenv("KAFKA_BROKER")
+    else:
+        broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS")
+
     if not broker:
-        print("[INFO]: KAFKA_BROKER/KAFKA_BOOTSTRAP_SERVERS not set; skipping Kafka production.")
+        print("[INFO]: Kafka broker not configured; not sending.")
         return None
+        
+    print(f"[INFO]: Connected to Kafka through: {broker}")
     return Producer({"bootstrap.servers": broker})
 
 def delivery_report(err, msg):
     if err is not None:
-        print(f"[ERR KAFKA]: Consegna fallita: {err}")
+        print(f"[ERR KAFKA]: Failed Delivery: {err}")
 
 def produce_study_to_kafka(producer, study):
     if producer is None:

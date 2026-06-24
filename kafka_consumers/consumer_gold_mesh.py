@@ -15,7 +15,7 @@ def get_kafka_consumer():
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     conf = {
         "bootstrap.servers": broker,
-        "group.id": "gold_mesh_loader_group_v2",  # ID Unico
+        "group.id": "gold_mesh_loader_group",  
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     }

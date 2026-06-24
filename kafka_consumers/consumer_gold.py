@@ -16,7 +16,7 @@ def get_kafka_consumer():
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     conf = {
         "bootstrap.servers": broker,
-        "group.id": "clinical_trials_gold_features_loader_v3",  
+        "group.id": "clinical_trials_gold_features_loader",  
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     }

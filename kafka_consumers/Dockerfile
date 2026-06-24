@@ -7,6 +7,8 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY shared/ ./shared/
+COPY kafka_consumers/ ./kafka_consumers/
+COPY dashboard/ ./dashboard/
 
 ENV PYTHONPATH=/app

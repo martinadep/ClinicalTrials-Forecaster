@@ -22,13 +22,13 @@ source .venv/bin/activate
 
 * Windows (Powershell):
 ```bash
-pip -m venv .venv
-.venv/Scripts/Activate.ps1
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
 Install python requirements:
 ```bash
-pip install -r requirements.txt
+pip install requests confluent-kafka python-dotenv
 ```
 
 Create a local environment file:
