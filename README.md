@@ -134,8 +134,9 @@ Kafka runs in KRaft mode (no Zookeeper). Data transits dynamically across 4 pre-
 | --- | --- |
 | `trials.bronze` | Raw study JSON payloads directly from ClinicalTrials.gov |
 | `trials.silver` | Cleaned, un-nested, and normalized relational trial records |
-| `trials.gold` | Feature-engineered datasets structured ready for ML |
-| `trials.forecasts` | ML inference engine outputs and predictions |
+|  `sites.silver` | Facilities extracted and exploded from the raw trial payloads |
+|  `trials.gold`  | Final engineered features for machine learning, containing trial attributes, aggregated historical site experience, and the target velocity |
+|   `mesh.gold`   | Catalog containing distinct MeSH (Medical Subject Headings) condition IDs and their corresponding official names |
 
 #### Inspecting Kafka via CLI
 

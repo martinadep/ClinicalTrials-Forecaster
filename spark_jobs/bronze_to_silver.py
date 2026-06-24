@@ -15,7 +15,6 @@ TOPIC_SILVER_TRIALS = "trials.silver"
 TOPIC_SILVER_SITES = "sites.silver"
 TOPIC_GOLD_MESH = "mesh.gold"
 
-# MERGED SCHEMA: Added conditionsModule to extract your colleague's new field
 JSON_SCHEMA = StructType([
     StructField("protocolSection", StructType([
         StructField("identificationModule", StructType([
@@ -54,7 +53,6 @@ JSON_SCHEMA = StructType([
             StructField("minimumAge", StringType()),
             StructField("maximumAge", StringType())
         ])),
-        # Added to capture raw conditions for the boolean feature
         StructField("conditionsModule", StructType([
             StructField("conditions", ArrayType(StringType()))
         ])),
