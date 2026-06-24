@@ -52,7 +52,6 @@ def flush_buffer(records):
     try:
         with conn:
             with conn.cursor() as cur:
-                # Forza Postgres ad attendere la fine della transazione prima di verificare la FK
                 cur.execute("SET CONSTRAINTS ALL DEFERRED;")
                 save_sites(cur, records)
         print(f"[INFO DB - SITES]: Sincronizzato bulk di {len(records)} siti clinici.")
