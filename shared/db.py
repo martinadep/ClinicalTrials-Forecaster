@@ -1,5 +1,8 @@
 import os
-from ingestion.transformer import extract_trial_fields
+import psycopg2
+import psycopg2.extras
+import hashlib
+import json
 
 def build_dsn_from_env():
     user = os.getenv("POSTGRES_USER")
@@ -11,154 +14,156 @@ def build_dsn_from_env():
         return f"postgresql://{user}:{password}@{host}:{port}/{db}"
     return None
 
+def build_jdbc_url_from_env():
+    user = os.getenv("POSTGRES_USER")
+    password = os.getenv("POSTGRES_PASSWORD")
+    db = os.getenv("POSTGRES_DB")
+    port = os.getenv("POSTGRES_PORT", "5432")
+    host = os.getenv("POSTGRES_HOST") or os.getenv("DB_HOST") or "localhost"
+    jdbc_url = f"jdbc:postgresql://{host}:{port}/{db}"
+    properties = {"user": user, "password": password, "driver": "org.postgresql.Driver"}
+    return jdbc_url, properties
 
-def _upsert_raw_trial(cur, fields, raw_payload):
-    """Insert or update bronze.raw_trials row and return raw_id."""
-    nct_id = fields["nct_id"]
-    payload_hash = fields["payload_hash"]
+def generic_upsert_partition(rows, query, fields, template=None):
+    """
+    Funzione core universale per eseguire upsert massivi dai nodi worker di Spark.
+    Evita la ripetizione di codice boilerplate per ogni tabella.
+    """
+    rows = list(rows)
+    if not rows: 
+        return
+    
+    dsn = build_dsn_from_env()
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn, conn.cursor() as cur:
+            data_batch = [
+                tuple(getattr(r, field, None) for field in fields)
+                for r in rows
+            ]
+            psycopg2.extras.execute_values(cur, query, data_batch, template=template)
+    finally: 
+        conn.close()
 
-    existing_raw = None
-    if nct_id:
-        cur.execute(
-            "SELECT id, payload_hash FROM bronze.raw_trials WHERE nct_id = %s LIMIT 1",
-            (nct_id,),
-        )
-        existing_raw = cur.fetchone()
-        
-    if existing_raw:
-        raw_id, existing_raw_hash = existing_raw
-        if existing_raw_hash != payload_hash:
-            cur.execute(
-                """
-                UPDATE bronze.raw_trials
-                SET nct_id = %s, payload = %s, payload_hash = %s, updated_at = NOW()
-                WHERE id = %s
-                """,
-                (nct_id, raw_payload, payload_hash, raw_id),
-            )
-        print(f"[INFO]: Updated raw trial with id {raw_id} for nct_id {nct_id}")
-        return raw_id
-
-    cur.execute(
-        """
-        INSERT INTO bronze.raw_trials (nct_id, payload_hash, payload)
-        VALUES (%s, %s, %s)
-        RETURNING id
-        """,
-        (nct_id, payload_hash, raw_payload),
-    )
-    raw_id = cur.fetchone()[0]
-    print(f"[INFO]: Inserted raw trial with id {raw_id} for nct_id {nct_id}")
-    return raw_id
-
-
-def _build_trial_values(fields, psycopg2_extras):
-    """Build positional values tuple for bronze.trials write operations."""
-    lead_sponsor = fields.get("lead_sponsor")
-    lead_sponsor_class = None
-    if isinstance(lead_sponsor, dict):
-        lead_sponsor_class = lead_sponsor.get("class")
-    if lead_sponsor_class is None:
-        lead_sponsor_class = fields.get("organization_class")
-
-    return (
-        fields["nct_id"],
-        fields["brief_title"],
-        fields.get("brief_summary"),
-        psycopg2_extras.Json(fields["conditions"]) if fields["conditions"] is not None else None,
-        fields["study_type"],
-        fields["phases"],
-        fields["primary_purpose"],
-        fields["enrollment_count"],
-        fields["overall_status"],
-        fields["start_date"],
-        fields["primary_completion_date"],
-        lead_sponsor_class,
-        fields.get("collaborator_names"),
-        fields["eligibility_criteria"],
-        fields["healthy_volunteers"],
-        fields["sex"],
-        fields["minimum_age"],
-        fields["maximum_age"],
-        psycopg2_extras.Json(fields["locations"]) if fields["locations"] else None,
-    )
-
-
-def _upsert_trial_row(cur, trial_values, nct_id):
-    """Insert or update bronze.trials row based on nct_id."""
-    existing_trial = None
-    if nct_id:
-        cur.execute("SELECT id FROM bronze.trials WHERE nct_id = %s LIMIT 1", (nct_id,))
-        existing_trial = cur.fetchone()
-
-    if existing_trial:
-        existing_id = existing_trial[0]
-        cur.execute(
-            """
-            UPDATE bronze.trials
-            SET
-                nct_id = %s,
-                brief_title = %s,
-                brief_summary = %s,
-                conditions = %s,
-                study_type = %s,
-                phases = %s,
-                primary_purpose = %s,
-                enrollment_count = %s,
-                overall_status = %s,
-                start_date = %s,
-                primary_completion_date = %s,
-                lead_sponsor_class = %s,
-                collaborator_names = %s,
-                eligibility_criteria = %s,
-                healthy_volunteers = %s,
-                sex = %s,
-                minimum_age = %s,
-                maximum_age = %s,
-                locations = %s,
-                updated_at = NOW()
-            WHERE id = %s
-            """,
-            trial_values + (existing_id,),
-        )
+def insert_bronze_studies_bulk(records, dsn=None):
+    """Salva ESCLUSIVAMENTE il payload RAW integro nello schema Bronze."""
+    if not records:
         return
 
-    cur.execute(
-        """
-        INSERT INTO bronze.trials (
-            nct_id, brief_title, brief_summary, conditions, study_type, phases,
-            primary_purpose, enrollment_count, overall_status, start_date,
-            primary_completion_date, lead_sponsor_class, collaborator_names,
-            eligibility_criteria, healthy_volunteers, sex, minimum_age, maximum_age,
-            locations
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        trial_values,
-    )
-
-
-def insert_study_into_db(study, dsn=None):
-    """Insert or update a study in bronze raw/current tables."""
-    try:
-        import psycopg2
-        import psycopg2.extras
-    except Exception as e:
-        raise RuntimeError("psycopg2 is required to insert into the database: %s" % e)
-
-    dsn = dsn or os.getenv("DATABASE_URL")
+    dsn = dsn or build_dsn_from_env()
     if not dsn:
-        raise ValueError("No DSN provided and DATABASE_URL not set")
+        raise ValueError("No DSN provided and DATABASE_URL/env variables not set")
 
-    fields = extract_trial_fields(study)
-    raw_payload = psycopg2.extras.Json(study)
+    raw_trials_batch = []
+
+    for study in records:
+        try:
+            # Estraiamo l'NCT_ID direttamente dal dizionario RAW per usarlo come chiave di partizionamento
+            nct_id = study.get("protocolSection", {}).get("identificationModule", {}).get("nctId")
+            if not nct_id:
+                continue
+
+            study_json_bytes = json.dumps(study, sort_keys=True).encode('utf-8')
+            payload_hash = hashlib.sha256(study_json_bytes).hexdigest()
+
+            raw_payload = psycopg2.extras.Json(study)
+            raw_trials_batch.append((nct_id, payload_hash, raw_payload))
+        except Exception as e:
+            print(f"[WARN INGESTION]: Impossibile accodare il record raw nel bulk: {e}")
+            continue
+
+    if not raw_trials_batch:
+        return
 
     conn = psycopg2.connect(dsn)
     try:
-        with conn:
-            with conn.cursor() as cur:
-                raw_id = _upsert_raw_trial(cur, fields, raw_payload)
-                trial_values = _build_trial_values(fields, psycopg2.extras)
-                _upsert_trial_row(cur, trial_values, fields["nct_id"])
-                return raw_id
+        with conn, conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO bronze.raw_trials (nct_id, payload_hash, payload)
+                VALUES %s ON CONFLICT (nct_id) DO UPDATE SET
+                    payload = EXCLUDED.payload, payload_hash = EXCLUDED.payload_hash, updated_at = NOW()
+                """,
+                raw_trials_batch, template="(%s, %s, %s)"
+            )
     finally:
         conn.close()
+
+def upsert_trials_partition(rows):
+    query = """
+    INSERT INTO silver.trials (
+        nct_id, brief_title, brief_summary, study_type, primary_purpose, overall_status, 
+        lead_sponsor_class, enrollment_count, start_date, primary_completion_date, sex, 
+        minimum_age_years, maximum_age_years, enrollment_duration_months, trial_velocity, 
+        phase, mesh_conditions_ids, transformed_at
+    ) VALUES %s ON CONFLICT (nct_id) DO UPDATE SET
+        brief_title = EXCLUDED.brief_title, brief_summary = EXCLUDED.brief_summary, study_type = EXCLUDED.study_type, 
+        primary_purpose = EXCLUDED.primary_purpose, overall_status = EXCLUDED.overall_status, lead_sponsor_class = EXCLUDED.lead_sponsor_class,
+        enrollment_count = EXCLUDED.enrollment_count, start_date = EXCLUDED.start_date, primary_completion_date = EXCLUDED.primary_completion_date, 
+        sex = EXCLUDED.sex, minimum_age_years = EXCLUDED.minimum_age_years, maximum_age_years = EXCLUDED.maximum_age_years,
+        enrollment_duration_months = EXCLUDED.enrollment_duration_months, trial_velocity = EXCLUDED.trial_velocity,
+        phase = EXCLUDED.phase, mesh_conditions_ids = EXCLUDED.mesh_conditions_ids, transformed_at = EXCLUDED.transformed_at
+    """
+    fields = [
+        "nct_id", "brief_title", "brief_summary", "study_type", "primary_purpose", "overall_status",
+        "lead_sponsor_class", "enrollment_count", "start_date", "primary_completion_date", "sex",
+        "minimum_age_years", "maximum_age_years", "enrollment_duration_months", "trial_velocity",
+        "phase", "mesh_conditions_ids" 
+    ]
+    generic_upsert_partition(rows, query, fields, template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())")
+
+def delete_and_insert_sites_partition(rows):
+    rows = list(rows)
+    if not rows: return
+    nct_ids = list(set(r.nct_id for r in rows if r.nct_id))
+    if not nct_ids: return
+    
+    dsn = build_dsn_from_env()
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM silver.trial_sites WHERE nct_id = ANY(%s)", (nct_ids,))
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO silver.trial_sites (nct_id, facility_name, city, state, zip, country, latitude, longitude, mesh_conditions_ids, transformed_at)
+                VALUES %s
+                """,
+                [(r.nct_id, r.facility_name, r.city, r.state, r.zip, r.country, r.latitude, r.longitude, r.mesh_conditions_ids) for r in rows],
+                template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())"
+            )
+    finally: conn.close()
+
+def upsert_mesh_dimension_partition(rows):
+    query = "INSERT INTO gold.dim_mesh_conditions (mesh_condition_id, mesh_condition_name) VALUES %s ON CONFLICT (mesh_condition_id) DO NOTHING"
+    fields = ["mesh_condition_id", "mesh_condition_name"]
+    generic_upsert_partition(rows, query, fields, template="(%s, %s)")
+
+def upsert_trial_features_partition(rows):
+    query = """
+    INSERT INTO gold.trial_features (
+        nct_id, study_type, primary_purpose, lead_sponsor_class, sex, phase, enrollment_count, 
+        n_sites, duration_months, mesh_conditions_ids, avg_site_exp, avg_site_vel, target_velocity
+    ) VALUES %s ON CONFLICT (nct_id) DO UPDATE SET 
+        study_type = EXCLUDED.study_type, primary_purpose = EXCLUDED.primary_purpose, lead_sponsor_class = EXCLUDED.lead_sponsor_class, 
+        sex = EXCLUDED.sex, phase = EXCLUDED.phase, enrollment_count = EXCLUDED.enrollment_count, n_sites = EXCLUDED.n_sites, 
+        duration_months = EXCLUDED.duration_months, mesh_conditions_ids = EXCLUDED.mesh_conditions_ids, avg_site_exp = EXCLUDED.avg_site_exp, 
+        avg_site_vel = EXCLUDED.avg_site_vel, target_velocity = EXCLUDED.target_velocity
+    """
+    fields = [
+        "nct_id", "study_type", "primary_purpose", "lead_sponsor_class", "sex", "phase",
+        "enrollment_count", "n_sites", "duration_months", "mesh_conditions_ids", "avg_site_exp",
+        "avg_site_vel", "target_velocity"
+    ]
+    generic_upsert_partition(rows, query, fields, template="(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+
+def truncate_tables(table_names):
+    if not table_names: return
+    dsn = build_dsn_from_env()
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn, conn.cursor() as cur:
+            tables_str = ", ".join(table_names)
+            cur.execute(f"TRUNCATE TABLE {tables_str} CASCADE")
+    finally: conn.close()

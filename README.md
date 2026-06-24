@@ -132,15 +132,16 @@ This removes the existing Docker volumes and reruns initialization. **Warning:**
 
 ### Running testing fetcher
 
+On Windows
 ```bash
-python -m ingestion.fetcher
+.\run_pipeline.ps1 -MaxTrials 2000
 ```
 
 This will:
 
-* fetch one page of studies from the ClinicalTrials.gov API
-* insert them into `bronze.raw_trials` and `bronze.trials` in Postgres
-* produce each study payload to the `trials.bronze` Kafka topic
+* fetch 2000 trials of studies from the ClinicalTrials.gov API
+* publish the data to the `trials.bronze` Kafka topic
+* 
 
 You can verify the results through:
 

@@ -9,22 +9,24 @@ CREATE TABLE IF NOT EXISTS silver.trials (
     primary_purpose           TEXT,
     overall_status            TEXT,
     lead_sponsor_class        TEXT,
+    phase                     TEXT,
     enrollment_count          INTEGER,   
     start_date                DATE,              
-    primary_completion_date   DATE,            
-    healthy_volunteers        BOOLEAN,           
+    primary_completion_date   DATE,              
     sex                       TEXT,
     minimum_age_years         NUMERIC,
     maximum_age_years         NUMERIC,
     enrollment_duration_months NUMERIC,
     trial_velocity            NUMERIC,   
+    mesh_conditions_ids       TEXT[],
+    has_non_diagnostic_condition BOOLEAN,
     transformed_at            TIMESTAMPTZ DEFAULT NOW()
 );
 
 
 CREATE TABLE IF NOT EXISTS silver.trial_sites (
     id                        SERIAL PRIMARY KEY,
-    nct_id                    TEXT REFERENCES silver.trials(nct_id) ON DELETE CASCADE,
+    nct_id                    TEXT,
     facility_name             TEXT,
     city                      TEXT,
     state                     TEXT,
@@ -32,8 +34,13 @@ CREATE TABLE IF NOT EXISTS silver.trial_sites (
     country                   TEXT,
     latitude                  NUMERIC,
     longitude                 NUMERIC,
-    conditions                TEXT[],
-    transformed_at            TIMESTAMPTZ DEFAULT NOW()
+    mesh_conditions_ids       TEXT[],
+    transformed_at            TIMESTAMPTZ DEFAULT NOW(),
+
+    CONSTRAINT trial_sites_nct_id_fkey 
+        FOREIGN KEY (nct_id) REFERENCES silver.trials(nct_id) 
+        ON DELETE CASCADE
+        DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX IF NOT EXISTS idx_silver_sites_geo ON silver.trial_sites(country, state, city, zip);
