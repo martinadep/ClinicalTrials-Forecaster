@@ -1,5 +1,14 @@
-# ClinicalTrials-Forecaster
-Project for BDT (Big Data Technologies)
+# Clinical Trial Site Selection & Recruitment Forecasting
+
+An Big Data platform designed to help researchers and trial sponsors optimize study planning. The system predicts and ranks candidate sites or regions by their expected **recruitment velocity** (patients enrolled per month), directly addressing patient recruitment delays—one of the primary causes of failure and high costs in clinical trials.
+
+The architecture is fully containerized and processes real-world, heterogeneous data from the **ClinicalTrials.gov API** through an advanced pipeline:
+
+*   **Data Streaming & Ingestion:** Batch ingestion handled by a Python producer and decoupled via **Apache Kafka** topics.
+*   **Storage & Refinement:** A **PostgreSQL Medallion Architecture** that structures raw nested JSON into clear, analytics-ready tables (Bronze, Silver, Gold layers).
+*   **Distributed Processing:** **Apache Spark** jobs for complex data cleaning and feature engineering.
+*   **Predictive Modeling:** A **Spark MLlib Gradient-Boosted Trees (GBT)** regression model that captures trial-specific dynamics and site histories, explaining ~58% of velocity variance ($R^2 \approx 0.58$).
+*   **Interactive Serving:** A user-friendly **Streamlit Dashboard** providing researchers with ranked recommendations, key performance metrics, and geographic site mapping.
 
 
 ## Running the project
@@ -22,13 +31,13 @@ source .venv/bin/activate
 
 * Windows (Powershell):
 ```bash
-pip -m venv .venv
-.venv/Scripts/Activate.ps1
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 ```
 
 Install python requirements:
 ```bash
-pip install -r requirements.txt
+pip install requests confluent-kafka python-dotenv
 ```
 
 Create a local environment file:
@@ -44,7 +53,7 @@ POSTGRES_PASSWORD=admin123
 POSTGRES_PORT=5432
 
 KAFKA_BROKER=localhost:9092
-KAFKA_TOPIC_BRONZE=trials.bronze
+KAFKA_TOPIC_BRONZE_TRIALS=kt.bronze.trials
 ```
 
 ---
@@ -67,7 +76,7 @@ The first startup will:
 * Download and run PostgreSQL, Adminer, Kafka, Kafdrop, and Apache Spark images
 * Create persistent Docker volumes for databases and streaming states
 * Execute `db/01_bronze.sql`, `db/02_silver.sql` and `db/03_gold.sql` to initialize the database schemas
-* Auto-create the Kafka topics (`trials.bronze`, `trials.silver`, `sites.silver`, `trials.gold` and `mesh.gold`)
+* Auto-create the Kafka topics (`kt.bronze.trials`, `kt.silver.trials`, `kt.silver.sites`, `kt.gold.trials` and `kt.gold.mesh`)
 
 The infrastructure services will be available at:
 
@@ -172,11 +181,11 @@ Kafka runs in KRaft mode (no Zookeeper). Data transits dynamically across 4 pre-
 
 | Topic | Purpose |
 | --- | --- |
-| `trials.bronze` | Raw study JSON payloads directly from ClinicalTrials.gov |
-| `trials.silver` | Cleaned, un-nested, and normalized relational trial records |
-|  `sites.silver` | Facilities extracted and exploded from the raw trial payloads |
-|  `trials.gold`  | Final engineered features for machine learning, containing trial attributes, aggregated historical site experience, and the target velocity |
-|   `mesh.gold`   | Catalog containing distinct MeSH (Medical Subject Headings) condition IDs and their corresponding official names |
+| `kt.bronze.trials` | Raw study JSON payloads directly from ClinicalTrials.gov |
+| `kt.silver.trials` | Cleaned, un-nested, and normalized relational trial records |
+|  `kt.silver.sites` | Facilities extracted and exploded from the raw trial payloads |
+|  `kt.gold.trials`  | Final engineered features for machine learning, containing trial attributes, aggregated historical site experience, and the target velocity |
+|   `kt.gold.mesh`   | Catalog containing distinct MeSH (Medical Subject Headings) condition IDs and their corresponding official names |
 
 #### Inspecting Kafka via CLI
 
@@ -187,7 +196,7 @@ docker exec clinical_trial_kafka kafka-topics --bootstrap-server localhost:9092 
 
 Read real-time messages from a topic (Ctrl+C to exit):
 ```bash
-docker exec clinical_trial_kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic trials.bronze --from-beginning --max-messages 10
+docker exec clinical_trial_kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic kt.bronze.trials --from-beginning --max-messages 10
 ```
 
 Alternatively, you can monitor topics, partition configurations, offsets, and consumer group lags via the **Kafdrop Web UI** at `http://localhost:9000`.

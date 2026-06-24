@@ -90,15 +90,11 @@ if (-not $WithTraining) {
     Write-Host "==================================================" -ForegroundColor Green
 }
 else {
-    # 4. Train the model (Docker-routed -- same container/pattern as steps 2-3,
-    # avoids the local Windows Hadoop/winutils.exe issue)
+    # 4. Train the model 
     Write-Host "`n====== [4/$TotalSteps] TRAINING THE MODEL ======" -ForegroundColor Yellow
     docker exec -it --user root clinical_trial_spark bash -c "cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR --packages org.postgresql:postgresql:42.7.3 models/train.py"
 
-    # 5. Refresh the model API and dashboard. --force-recreate is required, not
-    # optional: ml-api caches the loaded model in memory for its process
-    # lifetime, and dashboard only runs retrieve_data.py once at container
-    # startup -- a plain `up -d` is a no-op if they're already running.
+    # 5. Refresh the model API and dashboard.
     Write-Host "`n====== [5/$TotalSteps] REFRESHING ML API + DASHBOARD ======" -ForegroundColor Yellow
     docker compose up -d --force-recreate ml-api dashboard
     Wait-ContainerHealthy "clinical_trial_ml_api"

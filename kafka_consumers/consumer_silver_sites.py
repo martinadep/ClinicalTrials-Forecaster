@@ -10,13 +10,13 @@ from shared.db import build_dsn_from_env
 
 load_dotenv()
 DSN = build_dsn_from_env()
-TOPIC = "sites.silver"
+KAFKA_TOPIC_SILVER_SITES = os.getenv("KAFKA_TOPIC_SILVER_SITES", "kt.silver.sites")
 
 def get_kafka_consumer():
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     conf = {
         "bootstrap.servers": broker,
-        "group.id": "silver_sites_loader_group_v3",  
+        "group.id": "clinical_trials_silver_relational_loader",  
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     }
@@ -52,7 +52,6 @@ def flush_buffer(records):
     try:
         with conn:
             with conn.cursor() as cur:
-                # Forza Postgres ad attendere la fine della transazione prima di verificare la FK
                 cur.execute("SET CONSTRAINTS ALL DEFERRED;")
                 save_sites(cur, records)
         print(f"[INFO DB - SITES]: Sincronizzato bulk di {len(records)} siti clinici.")
@@ -64,8 +63,8 @@ def flush_buffer(records):
 
 def main():
     consumer = get_kafka_consumer()
-    consumer.subscribe([TOPIC])
-    print(f"[START]: Consumer SITES active on {TOPIC}")
+    consumer.subscribe([KAFKA_TOPIC_SILVER_SITES])
+    print(f"[START]: Consumer SITES active on {KAFKA_TOPIC_SILVER_SITES}")
 
     BATCH_SIZE = 500
     TIMEOUT = 3.0

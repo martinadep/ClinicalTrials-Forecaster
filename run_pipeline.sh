@@ -90,17 +90,14 @@ if [ "$WITH_TRAINING" = false ]; then
   echo " [SUCCESS] Data Pipeline executed successfully!   "
   echo "=================================================="
 else
-  # 4. Train the model (Docker-routed -- same container/pattern as steps 2-3)
+  # 4. Train the model
   echo -e "\n====== [4/$TOTAL_STEPS] TRAINING THE MODEL ======"
   docker exec -it --user root clinical_trial_spark bash -c \
   "cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false \
   --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR \
   --packages org.postgresql:postgresql:42.7.3 models/train.py"
 
-  # 5. Refresh the model API and dashboard. --force-recreate is required, not
-  # optional: ml-api caches the loaded model in memory for its process
-  # lifetime, and dashboard only runs retrieve_data.py once at container
-  # startup -- a plain `up -d` is a no-op if they're already running.
+  # 5. Refresh the model API and dashboard.
   echo -e "\n====== [5/$TOTAL_STEPS] REFRESHING ML API + DASHBOARD ======"
   docker compose up -d --force-recreate ml-api dashboard
   wait_for_container_healthy "clinical_trial_ml_api"

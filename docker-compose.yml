@@ -64,20 +64,20 @@ services:
       "echo 'Waiting for Kafka to be fully ready...' && 
       sleep 5 && 
       echo 'Creating Kafka topics...' && 
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.bronze --partitions 3 --replication-factor 1 && 
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.silver --partitions 3 --replication-factor 1 && 
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic sites.silver --partitions 3 --replication-factor 1 && 
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic mesh.gold --partitions 3 --replication-factor 1 && 
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.gold --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP_SERVERS} --create --if-not-exists --topic ${KAFKA_TOPIC_BRONZE_TRIALS} --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP_SERVERS} --create --if-not-exists --topic ${KAFKA_TOPIC_SILVER_TRIALS} --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP_SERVERS} --create --if-not-exists --topic ${KAFKA_TOPIC_SILVER_SITES} --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP_SERVERS} --create --if-not-exists --topic ${KAFKA_TOPIC_GOLD_MESH} --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP_SERVERS} --create --if-not-exists --topic ${KAFKA_TOPIC_GOLD_TRIALS} --partitions 3 --replication-factor 1 && 
       echo 'Topics created. Current list:' && 
-      kafka-topics --bootstrap-server kafka:29092 --list"
+      kafka-topics --bootstrap-server ${KAFKA_BOOTSTRAP_SERVERS} --list"
 
   kafdrop:
     image: obsidiandynamics/kafdrop
     ports:
       - "9000:9000"
     environment:
-      KAFKA_BROKERCONNECT: "kafka:29092"
+      KAFKA_BROKERCONNECT: "${KAFKA_BOOTSTRAP_SERVERS}"
     depends_on:
       - kafka
 
@@ -90,10 +90,10 @@ services:
     working_dir: /app
     environment:
       PYTHONPATH: /app
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      KAFKA_BROKER: kafka:29092
-      KAFKA_TOPIC_BRONZE: trials.bronze
-      KAFKA_TOPIC_SILVER: trials.silver
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      KAFKA_BROKER: ${KAFKA_BOOTSTRAP_SERVERS}
+      KAFKA_TOPIC_BRONZE_TRIALS: ${KAFKA_TOPIC_BRONZE_TRIALS}
+      KAFKA_TOPIC_SILVER_TRIALS: ${KAFKA_TOPIC_SILVER_TRIALS}
       POSTGRES_HOST: clinical_trial_db
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -107,15 +107,14 @@ services:
       postgres:
         condition: service_healthy
     command: tail -f /dev/null
-
-  # =========================================================================
+# =========================================================================
   # CONSUMERS 
   # =========================================================================
 
   consumer-bronze:
     build:
       context: .
-      dockerfile: Dockerfile.python
+      dockerfile: kafka_consumers/Dockerfile
     container_name: clinical_trial_consumer_bronze
     working_dir: /app
     volumes:
@@ -136,10 +135,11 @@ services:
       kafka-init:
         condition: service_completed_successfully
     command: python kafka_consumers/consumer_bronze.py
+
   consumer-silver-trials:
     build:
       context: .
-      dockerfile: Dockerfile.python
+      dockerfile: kafka_consumers/Dockerfile
     container_name: clinical_trial_consumer_silver_trials
     working_dir: /app
     volumes:
@@ -159,10 +159,11 @@ services:
       kafka-init:
         condition: service_completed_successfully
     command: python kafka_consumers/consumer_silver_trials.py
+
   consumer-silver-sites:
     build:
       context: .
-      dockerfile: Dockerfile.python
+      dockerfile: kafka_consumers/Dockerfile
     container_name: clinical_trial_consumer_silver_sites
     working_dir: /app
     volumes:
@@ -182,10 +183,11 @@ services:
       kafka-init:
         condition: service_completed_successfully
     command: python kafka_consumers/consumer_silver_sites.py
+
   consumer-gold-mesh:
     build:
       context: .
-      dockerfile: Dockerfile.python
+      dockerfile: kafka_consumers/Dockerfile
     container_name: clinical_trial_consumer_gold_mesh
     working_dir: /app
     volumes:
@@ -209,7 +211,7 @@ services:
   consumer-gold:
     build:
       context: .
-      dockerfile: Dockerfile.python
+      dockerfile: kafka_consumers/Dockerfile
     container_name: clinical_trial_consumer_gold
     working_dir: /app
     volumes:
@@ -238,7 +240,7 @@ services:
   ml-api:
     build:
       context: .
-      dockerfile: Dockerfile.spark
+      dockerfile: Dockerfile.spark   
     container_name: clinical_trial_ml_api
     user: root
     working_dir: /app
@@ -258,7 +260,7 @@ services:
   dashboard:
     build: 
       context: .
-      dockerfile: Dockerfile.python
+      dockerfile: kafka_consumers/Dockerfile  
     container_name: clinical_trial_dashboard
     working_dir: /app
     environment:
@@ -285,7 +287,6 @@ services:
       retries: 50
       start_period: 60s
     command: bash -c "python -m dashboard.retrieve_data && streamlit run dashboard/app.py --server.address=0.0.0.0"
-
 
 volumes:
   postgres_data:

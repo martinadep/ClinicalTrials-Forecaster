@@ -9,13 +9,13 @@ from shared.db import build_dsn_from_env
 
 load_dotenv()
 DSN = build_dsn_from_env()
-TOPIC = "mesh.gold"
+KAFKA_TOPIC_GOLD_MESH = os.getenv("KAFKA_TOPIC_GOLD_MESH", "kt.gold.mesh")
 
 def get_kafka_consumer():
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     conf = {
         "bootstrap.servers": broker,
-        "group.id": "gold_mesh_loader_group_v2",  # ID Unico
+        "group.id": "gold_mesh_loader_group",  
         "auto.offset.reset": "earliest",
         "enable.auto.commit": False,
     }
@@ -52,8 +52,8 @@ def flush_buffer(records):
 
 def main():
     consumer = get_kafka_consumer()
-    consumer.subscribe([TOPIC])
-    print(f"[START]: Consumer MESH attivo su {TOPIC}")
+    consumer.subscribe([KAFKA_TOPIC_GOLD_MESH])
+    print(f"[START]: Consumer MESH attivo su {KAFKA_TOPIC_GOLD_MESH}")
 
     BATCH_SIZE = 500
     TIMEOUT = 3.0
