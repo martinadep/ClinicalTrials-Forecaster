@@ -1,12 +1,13 @@
 import os, sys
 import streamlit as st
 import pandas as pd
+import requests
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.append(PROJECT_ROOT)
 
-from models.predict import predict_ranking
+ML_API_URL = os.environ.get("ML_API_URL", "http://localhost:8000")
 
 st.set_page_config(layout="wide")
 
@@ -101,21 +102,39 @@ if run:
                     "areas": []  
                 }
                 
-                candidates_list = filtered_candidates.rename(columns={
+                candidates_df = filtered_candidates.rename(columns={
                     "site": "facility_name",
                     "city": "city",
                     "country": "country"
-                }).to_dict(orient="records")
+                })
+                # NaN (e.g. missing state/zip) isn't JSON-compliant, and pandas'
+                # newer string dtype doesn't reliably clear it via .where(), so
+                # sanitize per-value after to_dict() instead.
+                candidates_list = [
+                    {k: (None if pd.isna(v) else v) for k, v in row.items()}
+                    for row in candidates_df.to_dict(orient="records")
+                ]
                 
                 try:
-                    
-                    ranked_results = predict_ranking(trial_params, candidates_list)
-                    
+
+                    resp = requests.post(
+                        f"{ML_API_URL}/predict",
+                        json={"trial_params": trial_params, "candidate_sites": candidates_list},
+                        # ml-api's first request after startup pays Spark JVM
+                        # boot + Maven jar resolution (~30-40s observed);
+                        # subsequent requests reuse the cached session and are fast.
+                        timeout=90,
+                    )
+                    resp.raise_for_status()
+                    ranked_results = resp.json()["ranked_results"]
+
                     if not ranked_results:
                         st.error("No valid candidate sites with a historical background available to rank.")
                     else:
                         output_rows = []
-                        for site_dict, pred_vel in ranked_results:
+                        for item in ranked_results:
+                            site_dict = item["site"]
+                            pred_vel = item["predicted_velocity"]
                             output_rows.append({
                                 "Site": site_dict.get("facility_name"),
                                 "City": site_dict.get("city"),

@@ -97,34 +97,60 @@ chmod +x run_pipeline.sh
 
 > **Configuration Note:** If you do not provide any argument (e.g., executing simply `.\run_pipeline.ps1`), the system automatically defaults to **15000** trials. Passing a lower value like `2000` is perfect for fast tests or active live demonstrations.
 
+> **Training note:** by default the script only runs ingestion + ETL (steps below in section 3 are manual). Add `-WithTraining` (PowerShell) / `--with-training` (Bash) to also train the model and refresh the dashboard as part of the same run -- see section 3 for what that does and why it's opt-in:
+> ```powershell
+> .\run_pipeline.ps1 -MaxTrials 2000 -WithTraining
+> ```
+> ```bash
+> ./run_pipeline.sh 2000 --with-training
+> ```
+> With `-WithTraining`, the script doesn't exit as soon as the containers are *started* -- it polls `ml-api` and `dashboard`'s Docker healthchecks and only finishes once both report `healthy`, since neither is actually ready to serve immediately (see the note in Step B below). This can take several minutes.
+
 ---
 
 ## 3. Machine Learning & Dashboard
 
-Once the processing steps finish and refined analytical inputs populate the data ecosystem, proceed with training and serving components.
+Once the processing steps finish and refined analytical inputs populate the data ecosystem, proceed with training and serving components. (Skip this whole section if you ran the pipeline with `-WithTraining`/`--with-training` -- it already did steps A and B below for you.)
+
+Retraining is **not** automatic otherwise -- nothing currently triggers it on its own, by design, so you decide when a retrain is worth the time:
 
 ### Step A: Train the Machine Learning Model
 
-Run the Python task to train the forecaster model on top of your engineered features:
+Training runs Spark, so like the bronze→silver and silver→gold jobs it must run
+inside the `spark` container, not as a bare local `python` command (running it
+locally requires a local Hadoop/`winutils.exe` install on Windows and will fail
+otherwise):
 ```bash
-python -m models.train
+docker exec -it --user root clinical_trial_spark bash -c "cd /app && /opt/spark/bin/spark-submit --master local[*] --packages org.postgresql:postgresql:42.7.3 models/train.py"
 ```
 
-### Step B: Retrieve Analytics Data
+### Step B: Launch the Model API and Dashboard
 
-Extract and prepare the predictions alongside real metrics to make them available for the front-end layer:
+The trained model is served by a small FastAPI service (`ml-api`), and the
+Streamlit dashboard (`dashboard`) calls it over HTTP -- both run as Docker
+Compose services, so no local Python/Spark setup is needed on your machine:
 ```bash
-python -m dashboard.retrieve_data
+docker compose up -d --force-recreate ml-api dashboard
 ```
 
-### Step C: Launch the Streamlit Dashboard
+`--force-recreate` matters here, not just `up -d`: `ml-api` keeps the trained
+model loaded in memory for as long as its process runs, and `dashboard` only
+runs `dashboard/retrieve_data.py` once, at container startup. If both
+containers were already running (e.g. you brought up the full stack with a
+plain `docker compose up -d` in section 1), a plain `up -d` here is a no-op
+and you'd keep serving the previous model/stale CSVs -- `--force-recreate`
+restarts them so the new model and gold-layer data actually get picked up.
 
-Launch the web interface application to visualize statistics, performance tracking, and forecasts:
-```bash
-streamlit run dashboard/app.py
-```
+Neither container is a no-cache build, so this `pip install`s `ml-api`'s and
+`dashboard`'s dependencies from scratch every time -- a container showing
+`Up` in `docker compose ps` doesn't mean it's actually ready yet. Both
+services have a Docker healthcheck (`ml-api` polls its own `/health`,
+`dashboard` polls Streamlit's `/_stcore/health`); wait for `docker compose ps`
+to show `(healthy)` next to both before opening the dashboard. The first run
+after a fresh recreate has taken up to ~5 minutes in testing; later requests
+are fast.
 
-The client UI will immediately open and become reachable at `http://localhost:8501`.
+The dashboard UI will then be reachable at `http://localhost:8501`.
 
 ---
 
