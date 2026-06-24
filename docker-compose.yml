@@ -60,17 +60,17 @@ services:
       kafka:
         condition: service_healthy
     entrypoint: ["/bin/bash", "-c"]
-    command: |
-      "
-      echo 'Creating Kafka topics...'
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.bronze --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.silver --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic sites.silver --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic mesh.gold --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.gold --partitions 3 --replication-factor 1
-      echo 'Topics created. Current list:'
-      kafka-topics --bootstrap-server kafka:29092 --list
-      "
+    command: >
+      "echo 'Waiting for Kafka to be fully ready...' && 
+      sleep 5 && 
+      echo 'Creating Kafka topics...' && 
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.bronze --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.silver --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic sites.silver --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic mesh.gold --partitions 3 --replication-factor 1 && 
+      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.gold --partitions 3 --replication-factor 1 && 
+      echo 'Topics created. Current list:' && 
+      kafka-topics --bootstrap-server kafka:29092 --list"
 
   kafdrop:
     image: obsidiandynamics/kafdrop
@@ -82,7 +82,9 @@ services:
       - kafka
 
   spark:
-    image: apache/spark:3.5.1
+    build: 
+      context: .
+      dockerfile: Dockerfile.spark
     container_name: clinical_trial_spark
     user: root
     working_dir: /app
@@ -104,15 +106,16 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    command: >
-      bash -c "pip3 install --upgrade pip && pip3 install --no-cache-dir psycopg2-binary==2.9.10 confluent-kafka==2.3.0 numpy pandas && tail -f /dev/null"
+    command: tail -f /dev/null
 
   # =========================================================================
   # CONSUMERS 
   # =========================================================================
 
   consumer-bronze:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.python
     container_name: clinical_trial_consumer_bronze
     working_dir: /app
     volumes:
@@ -132,10 +135,11 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
-    command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_bronze.py"
+    command: python kafka_consumers/consumer_bronze.py
   consumer-silver-trials:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.python
     container_name: clinical_trial_consumer_silver_trials
     working_dir: /app
     volumes:
@@ -154,10 +158,11 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
-    command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_silver_trials.py"
+    command: python kafka_consumers/consumer_silver_trials.py
   consumer-silver-sites:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.python
     container_name: clinical_trial_consumer_silver_sites
     working_dir: /app
     volumes:
@@ -176,10 +181,11 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
-    command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_silver_sites.py"
+    command: python kafka_consumers/consumer_silver_sites.py
   consumer-gold-mesh:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.python
     container_name: clinical_trial_consumer_gold_mesh
     working_dir: /app
     volumes:
@@ -198,11 +204,12 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
-    command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_gold_mesh.py"
+    command: python kafka_consumers/consumer_gold_mesh.py
     
   consumer-gold:
-    image: python:3.11-slim
+    build:
+      context: .
+      dockerfile: Dockerfile.python
     container_name: clinical_trial_consumer_gold
     working_dir: /app
     volumes:
@@ -222,22 +229,20 @@ services:
         condition: service_healthy
       kafka-init:
         condition: service_completed_successfully
-    command: >
-      bash -c "pip install --no-cache-dir psycopg2-binary confluent-kafka && python kafka_consumers/consumer_gold.py"
+    command: python kafka_consumers/consumer_gold.py
 
   # =========================================================================
   # ML SERVING + DASHBOARD
   # =========================================================================
 
   ml-api:
-    image: apache/spark:3.5.1
+    build:
+      context: .
+      dockerfile: Dockerfile.spark
     container_name: clinical_trial_ml_api
     user: root
     working_dir: /app
     environment:
-      # apache/spark:3.5.1 already bundles PySpark under $SPARK_HOME/python --
-      # point PYTHONPATH at it instead of pip-installing the ~300MB pyspark
-      # wheel again.
       PYTHONPATH: /app:/opt/spark/python:/opt/spark/python/lib/py4j-0.10.9.7-src.zip
     volumes:
       - .:/app
@@ -248,12 +253,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 15
-    command: >
-      bash -c "pip3 install --no-cache-dir fastapi 'uvicorn[standard]' pandas &&
-               uvicorn models.ml_api:app --host 0.0.0.0 --port 8000"
+    command: uvicorn models.ml_api:app --host 0.0.0.0 --port 8000
 
   dashboard:
-    image: python:3.11-slim
+    build: 
+      context: .
+      dockerfile: Dockerfile.python
     container_name: clinical_trial_dashboard
     working_dir: /app
     environment:
@@ -275,14 +280,11 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')\""]
-      interval: 10s
+      interval: 15s
       timeout: 5s
-      retries: 40
+      retries: 50
       start_period: 60s
-    command: >
-      bash -c "pip install --no-cache-dir streamlit pandas requests psycopg2-binary &&
-               python -m dashboard.retrieve_data &&
-               streamlit run dashboard/app.py --server.address=0.0.0.0"
+    command: bash -c "python -m dashboard.retrieve_data && streamlit run dashboard/app.py --server.address=0.0.0.0"
 
 
 volumes:
