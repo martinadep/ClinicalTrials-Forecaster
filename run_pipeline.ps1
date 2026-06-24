@@ -2,6 +2,9 @@ param (
     [int]$MaxTrials = 0
 )
 
+$ErrorActionPreference = "Stop"
+
+# Function to wait for a Kafka consumer group to process all pending messages (Lag = 0)
 function Wait-ConsumerGroup {
     param ( [string]$GroupName )
     Write-Host "[CHECK]: Waiting for consumer group '$GroupName' to clear Kafka lag..." -ForegroundColor Cyan
@@ -38,26 +41,33 @@ Write-Host "     RUNNING CLINICAL TRIALS PIPELINE (WINDOWS)   " -ForegroundColor
 Write-Host "==================================================" -ForegroundColor Cyan
 
 # 1. Fetcher Ingestion
-Write-Host "`n====== [1/3] STARTING INGESTION (FETCHER) ======" -ForegroundColor Yellow
-
+Write-Host "`n====== [1/5] STARTING INGESTION (FETCHER) ======" -ForegroundColor Yellow
 $fetcherArgs = @("-m", "ingestion.fetcher")
 if ($MaxTrials -gt 0) {
     $fetcherArgs += @("--max-trials", $MaxTrials)
 }
-
 python $fetcherArgs
 Wait-ConsumerGroup "clinical_trials_bronze_loader"
 
 # 2. Spark Bronze to Silver
-Write-Host "`n====== [2/3] STARTING SPARK JOB: BRONZE TO SILVER ======" -ForegroundColor Yellow
+Write-Host "`n====== [2/5] STARTING SPARK JOB: BRONZE TO SILVER ======" -ForegroundColor Yellow
 docker exec -it --user root clinical_trial_spark bash -c "cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3 spark_jobs/bronze_to_silver.py"
 Wait-ConsumerGroup "clinical_trials_silver_relational_loader"
 
 # 3. Spark Silver to Gold
-Write-Host "`n====== [3/3] STARTING SPARK JOB: SILVER TO GOLD ======" -ForegroundColor Yellow
+Write-Host "`n====== [3/5] STARTING SPARK JOB: SILVER TO GOLD ======" -ForegroundColor Yellow
 docker exec -it --user root clinical_trial_spark bash -c "cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR --packages org.postgresql:postgresql:42.7.3,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 spark_jobs/silver_to_gold.py"
 Wait-ConsumerGroup "clinical_trials_gold_features_loader"
 
+# 4. Machine Learning Training
+Write-Host "`n====== [4/5] STARTING ML MODEL TRAINING ======" -ForegroundColor Yellow
+docker exec -it clinical_trial_ml_workflow python -m models.train
+
+# 5. Dashboard Data Retrieval 
+Write-Host "`n====== [5/5] RETRIEVING DASHBOARD DATA ======" -ForegroundColor Yellow
+docker exec -it clinical_trial_ml_workflow python -m dashboard.retrieve_data
+
 Write-Host "`n==================================================" -ForegroundColor Green
 Write-Host " [SUCCESS] Data Pipeline executed successfully!   " -ForegroundColor Green
+Write-Host " [INFO] Open http://localhost:8501 to view dashboard " -ForegroundColor Green
 Write-Host "==================================================" -ForegroundColor Green

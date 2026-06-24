@@ -2,7 +2,7 @@
 set -e
 
 MAX_TRIALS_ARG=""
-if [ -not -z "$1" ]; then
+if [ ! -z "$1" ]; then
   MAX_TRIALS_ARG="--max-trials $1"
 fi
 
@@ -29,12 +29,12 @@ echo "    RUNNING CLINICAL TRIALS PIPELINE (LINUX)     "
 echo "=================================================="
 
 # 1. Fetcher Ingestion
-echo -e "\n====== [1/3] STARTING INGESTION (FETCHER) ======"
+echo -e "\n====== [1/5] STARTING INGESTION (FETCHER) ======"
 python -m ingestion.fetcher $MAX_TRIALS_ARG
 wait_for_consumer_group "clinical_trials_bronze_loader"
 
 # 2. Spark Bronze to Silver
-echo -e "\n====== [2/3] STARTING SPARK JOB: BRONZE TO SILVER ======"
+echo -e "\n====== [2/5] STARTING SPARK JOB: BRONZE TO SILVER ======"
 docker exec -it --user root clinical_trial_spark bash -c \
 "cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false \
 --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR \
@@ -42,13 +42,22 @@ docker exec -it --user root clinical_trial_spark bash -c \
 wait_for_consumer_group "clinical_trials_silver_relational_loader"
 
 # 3. Spark Silver to Gold
-echo -e "\n====== [3/3] STARTING SPARK JOB: SILVER TO GOLD ======"
+echo -e "\n====== [3/5] STARTING SPARK JOB: SILVER TO GOLD ======"
 docker exec -it --user root clinical_trial_spark bash -c \
 "cd /app && /opt/spark/bin/spark-submit --master local[*] --conf spark.ui.showConsoleProgress=false \
 --conf spark.driver.extraJavaOptions=-Dlog4j.configurationProcessor=ERROR \
 --packages org.postgresql:postgresql:42.7.3,org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1 spark_jobs/silver_to_gold.py"
 wait_for_consumer_group "clinical_trials_gold_features_loader"
 
+# 4. Machine Learning Training
+echo -e "\n====== [4/5] STARTING ML MODEL TRAINING ======"
+docker exec -it clinical_trial_ml_workflow python -m models.train
+
+# 5. Dashboard Data Retrieval
+echo -e "\n====== [5/5] RETRIEVING DASHBOARD DATA ======"
+docker exec -it clinical_trial_ml_workflow python -m dashboard.retrieve_data
+
 echo -e "\n=================================================="
 echo " [SUCCESS] Data Pipeline executed successfully!   "
+echo " [INFO] Open http://localhost:8501 to view dashboard "
 echo "=================================================="

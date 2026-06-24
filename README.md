@@ -42,7 +42,7 @@ Start Docker Desktop on Windows / macOS:
 docker desktop start
 ```
 
-To ensure a completely clean state (highly recommended for a clean demo) and spin up the architecture containers, run:
+To ensure a completely clean state [highly recommended for a clean demo) and spin up the architecture containers, run:
 ```bash
 docker compose down -v
 docker compose up -d
@@ -54,19 +54,19 @@ The first startup will:
 * Create persistent Docker volumes for databases and streaming states
 * Execute `db/01_bronze.sql`, `db/02_silver.sql` and `db/03_gold.sql` to initialize the database schemas
 * Auto-create the Kafka topics (`trials.bronze`, `trials.silver`, `sites.silver`, `trials.gold` and `mesh.gold`)
+* Install dependencies and host the **Streamlit Dashboard** inside an isolated container.
+
 
 The infrastructure services will be available at:
-
-* **PostgreSQL:** `localhost:5432`
-* **Adminer (DB Web UI):** `http://localhost:8080`
-* **Kafka Broker:** `localhost:9092`
-* **Kafdrop (Kafka UI):** `http://localhost:9000`
+* **Streamlit Dashboard (UI):** [http://localhost:8501](http://localhost:8501)
+* **Adminer (Postgres DB UI):** [http://localhost:8080](http://localhost:8080)
+* **Kafdrop (Kafka UI):** [http://localhost:9000](http://localhost:9000)
 
 ---
 
 ## 2. Execute the Data Pipeline (Ingestion & Processing)
 
-The orchestration pipeline handles execution sequentially. It launches the Python Fetcher to ingest live API data into Kafka, followed by Apache Spark jobs that progressively transition and transform data across layers, waiting dynamically until the Kafka consumer lags are completely cleared.
+The orchestration script handles the entire data lifecycle sequentially with a single action. It boots the Python Fetcher to ingest live API data, coordinates Apache Spark transformations across layers (dynamically waiting for Kafka consumer lags to clear), triggers the **Machine Learning Training**, and updates the **Dashboard Data Layer** completely inside the Docker environment.
 
 Execute the pipeline script depending on your OS:
 
@@ -83,8 +83,10 @@ chmod +x run_pipeline.sh
 
 > **Configuration Note:** If you do not provide any argument (e.g., executing simply `.\run_pipeline.ps1`), the system automatically defaults to **15000** trials. Passing a lower value like `2000` is perfect for fast tests or active live demonstrations.
 
----
+Once the terminal outputs the `[SUCCESS]` signal, go to [http://localhost:8501](http://localhost:8501) to view your populated and ready-to-use live dashboard.
 
+---
+<!-- 
 ## 3. Machine Learning & Dashboard
 
 Once the processing steps finish and refined analytical inputs populate the data ecosystem, proceed with training and serving components.
@@ -112,7 +114,7 @@ streamlit run dashboard/app.py
 
 The client UI will immediately open and become reachable at `http://localhost:8501`.
 
----
+--- -->
 
 ## Technical Appendix
 
