@@ -68,7 +68,6 @@ services:
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic sites.silver --partitions 3 --replication-factor 1
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic mesh.gold --partitions 3 --replication-factor 1
       kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.gold --partitions 3 --replication-factor 1
-      kafka-topics --bootstrap-server kafka:29092 --create --if-not-exists --topic trials.forecasts --partitions 3 --replication-factor 1
       echo 'Topics created. Current list:'
       kafka-topics --bootstrap-server kafka:29092 --list
       "
