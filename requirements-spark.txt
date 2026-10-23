@@ -1,0 +1,11 @@
+numpy
+pandas
+
+requests
+
+psycopg2-binary
+SQLAlchemy==2.0.51
+
+fastapi
+uvicorn[standard]
+pydantic

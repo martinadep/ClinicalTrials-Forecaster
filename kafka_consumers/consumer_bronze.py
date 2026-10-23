@@ -7,7 +7,7 @@ from shared.db import build_dsn_from_env, insert_bronze_studies_bulk
 
 load_dotenv()
 DSN = build_dsn_from_env()
-TOPIC_BRONZE = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
+KAFKA_TOPIC_BRONZE_TRIALS = os.getenv("KAFKA_TOPIC_BRONZE_TRIALS", "kt.bronze.trials")
 
 def get_kafka_consumer():
     broker = os.getenv("KAFKA_BROKER") or os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
@@ -21,8 +21,8 @@ def get_kafka_consumer():
 
 def main():
     consumer = get_kafka_consumer()
-    consumer.subscribe([TOPIC_BRONZE])
-    print(f"[START]: Consumer BRONZE unificato in ascolto su {TOPIC_BRONZE}")
+    consumer.subscribe([KAFKA_TOPIC_BRONZE_TRIALS])
+    print(f"[START]: Consumer BRONZE unificato in ascolto su {KAFKA_TOPIC_BRONZE_TRIALS}")
 
     BATCH_SIZE = 500
     TIMEOUT = 3.0

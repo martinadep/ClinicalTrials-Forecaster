@@ -1,5 +1,6 @@
 param (
-    [int]$MaxTrials = 0
+    [int]$MaxTrials = 0,
+    [switch]$WithTraining
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +36,31 @@ function Wait-ConsumerGroup {
         }
     }
 }
+
+function Wait-ContainerHealthy {
+    param ( [string]$ContainerName, [int]$TimeoutSeconds = 360 )
+    Write-Host "[CHECK]: Waiting for container '$ContainerName' to become healthy..." -ForegroundColor Cyan
+
+    $elapsed = 0
+    while ($true) {
+        $status = docker inspect --format='{{.State.Health.Status}}' $ContainerName 2>$null
+
+        if ($status -eq "healthy") {
+            Write-Host "[OK]: Container '$ContainerName' is healthy." -ForegroundColor Green
+            break
+        }
+        if ($elapsed -ge $TimeoutSeconds) {
+            Write-Host "[WARN]: Timed out waiting for '$ContainerName' to become healthy (status: $status). Check 'docker logs $ContainerName'." -ForegroundColor Red
+            break
+        }
+
+        Write-Host "[WAIT]: '$ContainerName' status: $status. Retrying in 5 seconds..." -ForegroundColor DarkYellow
+        Start-Sleep -Seconds 5
+        $elapsed += 5
+    }
+}
+
+$TotalSteps = if ($WithTraining) { 5 } else { 3 }
 
 Write-Host "==================================================" -ForegroundColor Cyan
 Write-Host "     RUNNING CLINICAL TRIALS PIPELINE (WINDOWS)   " -ForegroundColor Cyan

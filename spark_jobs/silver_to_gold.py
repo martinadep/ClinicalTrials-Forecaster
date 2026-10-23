@@ -5,6 +5,9 @@ from pyspark.sql import functions as F
 from shared.config import load_dotenv
 from shared.db import build_jdbc_url_from_env , truncate_tables
 
+KAFKA_TOPIC_GOLD_TRIALS = os.getenv("KAFKA_TOPIC_GOLD_TRIALS", "kt.gold.trials")
+KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
+
 def read_table(spark, jdbc_url, properties, dbtable):
     """Loads a database table via JDBC."""
     return spark.read.jdbc(url=jdbc_url, table=dbtable, properties=properties)
@@ -12,14 +15,13 @@ def read_table(spark, jdbc_url, properties, dbtable):
 def main():
     load_dotenv()
     jdbc_url, jdbc_props = build_jdbc_url_from_env()
-    TOPIC_GOLD_FEATURES = os.getenv("KAFKA_TOPIC_GOLD_FEATURES", "trials.gold")
-    KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
 
     print("[START]: Initializing Spark Session for Silver -> Gold ...")
     
     spark = SparkSession.builder \
         .appName("silver_to_gold") \
         .config("spark.sql.shuffle.partitions", "4") \
+        .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1") \
         .getOrCreate()
     
     spark.sparkContext.setLogLevel("ERROR") 
@@ -141,13 +143,13 @@ def main():
         F.col("target_velocity").cast("double")
     )
 
-    print(f"[INFO]: -> Writing dataframes to Kafka topic: {TOPIC_GOLD_FEATURES}...")
+    print(f"[INFO]: -> Writing dataframes to Kafka topic: {KAFKA_TOPIC_GOLD_TRIALS}...")
     (
         trial_features_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value")
         .write
         .format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
-        .option("topic", TOPIC_GOLD_FEATURES)
+        .option("topic", KAFKA_TOPIC_GOLD_TRIALS)
         .option("kafka.producer.acks", "1")
         .option("kafka.batch.size", "65536")
         .option("kafka.lingers.ms", "10")

@@ -24,6 +24,37 @@ wait_for_consumer_group() {
   done
 }
 
+# Function to wait for a container's Docker healthcheck to report "healthy"
+wait_for_container_healthy() {
+  local container_name=$1
+  local timeout_seconds=${2:-360}
+  local elapsed=0
+  echo "[CHECK]: Waiting for container '$container_name' to become healthy..."
+
+  while true; do
+    local status=$(docker inspect --format='{{.State.Health.Status}}' "$container_name" 2>/dev/null)
+
+    if [ "$status" = "healthy" ]; then
+      echo "[OK]: Container '$container_name' is healthy."
+      break
+    fi
+    if [ "$elapsed" -ge "$timeout_seconds" ]; then
+      echo "[WARN]: Timed out waiting for '$container_name' to become healthy (status: $status). Check 'docker logs $container_name'."
+      break
+    fi
+
+    echo "[WAIT]: '$container_name' status: $status. Retrying in 5 seconds..."
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+}
+
+if [ "$WITH_TRAINING" = true ]; then
+  TOTAL_STEPS=5
+else
+  TOTAL_STEPS=3
+fi
+
 echo "=================================================="
 echo "    RUNNING CLINICAL TRIALS PIPELINE (LINUX)     "
 echo "=================================================="

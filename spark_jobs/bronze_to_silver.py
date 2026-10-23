@@ -9,13 +9,11 @@ from shared.config import load_dotenv
 from shared.conditions import NON_DIAGNOSTIC_TERMS
 
 KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:29092")
-TOPIC_BRONZE = os.getenv("KAFKA_TOPIC_BRONZE", "trials.bronze")
+KAFKA_TOPIC_BRONZE_TRIALS = os.getenv("KAFKA_TOPIC_BRONZE_TRIALS", "kt.bronze.trials")
+KAFKA_TOPIC_SILVER_TRIALS = os.getenv("KAFKA_TOPIC_SILVER_TRIALS","kt.silver.trials")
+KAFKA_TOPIC_SILVER_SITES = os.getenv("KAFKA_TOPIC_SILVER_SITES","kt.silver.sites")
+KAFKA_TOPIC_GOLD_MESH = os.getenv("KAFKA_TOPIC_GOLD_MESH","kt.gold.mesh")
 
-TOPIC_SILVER_TRIALS = "trials.silver"
-TOPIC_SILVER_SITES = "sites.silver"
-TOPIC_GOLD_MESH = "mesh.gold"
-
-# MERGED SCHEMA: Added conditionsModule to extract your colleague's new field
 JSON_SCHEMA = StructType([
     StructField("protocolSection", StructType([
         StructField("identificationModule", StructType([
@@ -54,7 +52,6 @@ JSON_SCHEMA = StructType([
             StructField("minimumAge", StringType()),
             StructField("maximumAge", StringType())
         ])),
-        # Added to capture raw conditions for the boolean feature
         StructField("conditionsModule", StructType([
             StructField("conditions", ArrayType(StringType()))
         ])),
@@ -94,11 +91,11 @@ def main():
     
     spark.sparkContext.setLogLevel("ERROR")
 
-    print(f"[INFO]: Reading raw data from Kafka topic: {TOPIC_BRONZE}...")
+    print(f"[INFO]: Reading raw data from Kafka topic: {KAFKA_TOPIC_BRONZE_TRIALS}...")
     raw_df = (
         spark.read.format("kafka")
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP)
-        .option("subscribe", TOPIC_BRONZE)
+        .option("subscribe", KAFKA_TOPIC_BRONZE_TRIALS)
         .option("startingOffsets", "earliest")
         .option("endingOffsets", "latest")
         .load()
@@ -247,22 +244,22 @@ def main():
          .option("kafka.lingers.ms", "10")
          .save())
 
-    print(f"[INFO]: -> Evaluating and Publishing Silver Trials to {TOPIC_SILVER_TRIALS}...")
+    print(f"[INFO]: -> Evaluating and Publishing Silver Trials to {KAFKA_TOPIC_SILVER_TRIALS}...")
     write_to_kafka(
         trials_final.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value"), 
-        TOPIC_SILVER_TRIALS
+        KAFKA_TOPIC_SILVER_TRIALS
     )
 
-    print(f"[INFO]: -> Evaluating and Publishing Silver Sites to {TOPIC_SILVER_SITES}...")
+    print(f"[INFO]: -> Evaluating and Publishing Silver Sites to {KAFKA_TOPIC_SILVER_SITES}...")
     write_to_kafka(
         sites_df.selectExpr("cast(nct_id as string) as key", "to_json(struct(*)) as value"), 
-        TOPIC_SILVER_SITES
+        KAFKA_TOPIC_SILVER_SITES
     )
 
-    print(f"[INFO]: -> Evaluating and Publishing Mesh IDS and Names to {TOPIC_GOLD_MESH}...")
+    print(f"[INFO]: -> Evaluating and Publishing Mesh IDS and Names to {KAFKA_TOPIC_GOLD_MESH}...")
     write_to_kafka(
         mesh_df.selectExpr("cast(mesh_condition_id as string) as key", "to_json(struct(*)) as value"), 
-        TOPIC_GOLD_MESH
+        KAFKA_TOPIC_GOLD_MESH
     )
 
     print(f"### [SUCCESS]: SPARK Bronze -> Silver completed successfully.")
